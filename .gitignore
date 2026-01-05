@@ -1,0 +1,19 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual Env
+venv/
+.venv/
+
+#IDE
+.idea/
+
+#Data (CRITICAL)
+*.db
+*.sqlite3
+data/*.db
+
+#Logs
+*.log
+logs/*.log
