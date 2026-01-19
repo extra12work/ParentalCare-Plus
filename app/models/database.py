@@ -29,7 +29,7 @@ Base = declarative_base()
 engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
 
 # Factory that will make database sessions later ,
-# we bind to engine so session k ow where to save
+# we bind to engine so session know where to save
 Session = sessionmaker(bind=engine)
 
 class AppUsageLog(Base):
