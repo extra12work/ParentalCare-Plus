@@ -38,7 +38,7 @@ class AppUsageLog(Base):
     id = Column(Integer, primary_key=True)
     process_name = Column(String)   # eg 'chrome.exe'
     window_title = Column(String)   # eg 'YouTube - Google Chrome'
-    start_time = Column(DateTime, default=datetime.now())
+    start_time = Column(DateTime, default=datetime.now)
     end_time = Column(DateTime)
     duration_seconds = Column(Integer)
     category = Column(String)   # eg 'Productivity', 'Gaming'
