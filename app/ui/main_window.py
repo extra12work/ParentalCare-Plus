@@ -9,7 +9,10 @@
 import sys
 import customtkinter as ctk
 from sqlalchemy.orm import sessionmaker
-from app.models.database import engine, Settings, get_app_usage_state
+from app.models.database import (
+    engine, Settings, get_app_usage_state,
+    add_blocked_app, remove_blocked_app, get_blocked_apps
+)
 import threading
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -241,6 +244,78 @@ class MainWindow(ctk.CTk):
             command=self.save_settings_to_db
         )
         self.sw_web.pack(pady=20, padx=20, anchor="w")
+
+
+        # Blacklist Session
+        ctk.CTkLabel(self.settings_frame, text = "Blocked Applications",
+                     font = ctk.CTkFont(size=18, weight="bold"), text_color=DUST_GREY).pack(pady=(30, 10), padx=30, anchor="w")
+
+        # Input Area
+        input_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        input_frame.pack(padx=30, fill="x")
+
+        self.app_entry = ctk.CTkEntry(input_frame, placeholder_text="e.g., discord.exe ",
+                                      text_color=DUST_GREY, fg_color=GUNMETAL, border_color=PINE_BLUE)
+        self.app_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        add_btn = ctk.CTkButton(input_frame, text="Block App", fg_color=OLD_GOLD, text_color=CARBON_BLACK,
+                                width=100, command=self.add_app_to_blacklist)
+        add_btn.pack(side="right")
+
+        # List Area
+        self.blacklist_frame = ctk.CTkScrollableFrame(self.settings_frame, fg_color=GUNMETAL, height=200)
+        self.blacklist_frame.pack(pady=20, padx=30, fill="both", expand=True)
+
+        self.refresh_blocked_list()
+
+    def add_app_to_blacklist(self):
+        """UI Handler: Adds text from text to DB"""
+
+        app_name = self.app_entry.get().strip()
+
+        if app_name:
+            add_blocked_app(app_name)
+            self.app_entry.delete(0, "end")     #Clear Input
+            self.refresh_blocked_list()     # Update UI
+
+
+    def refresh_blocked_list(self):
+        """UI Handler: Re-draws the list from DB"""
+
+        # Clear old widgets
+        for widget in self.blacklist_frame.winfo_children():
+            widget.destroy()
+
+        # Get fresh data
+        apps = get_blocked_apps()
+
+        if not apps:
+            ctk.CTkLabel(self.blacklist_frame, text="No app Blocked yet", text_color=DUST_GREY).pack(pady=20)
+            return
+
+        for app_name in apps:
+            row = ctk.CTkFrame(self.blacklist_frame, fg_color="transparent")
+            row.pack(fill="x", pady=5)
+
+            # Add Button
+            ctk.CTkLabel(row, text=app_name, text_color="white", anchor="w").pack(side="left", padx=10)
+
+            # Remove Button
+            ctk.CTkButton(row, text="Remove", fg_color="#cf4444", width=60, height=25,
+                         command=lambda a=app_name: self.delete_app_from_blacklist(a)).pack(side="right", padx=10)
+
+
+    def delete_app_from_blacklist(self, app_name):
+        remove_blocked_app(app_name)
+        self.refresh_blocked_list()
+
+
+
+
+
+
+
+
 
 
     def select_frame(self, name):

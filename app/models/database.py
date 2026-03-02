@@ -1,7 +1,7 @@
 # ParentalCare+ Module: database.py
 # Component of MVC Architecture: The Data Layer
 
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, func, desc
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import os
@@ -70,6 +70,71 @@ class Settings(Base):
     key = Column(String, primary_key=True)      # eg 'app_blocker_enabled'
     value = Column(String)      # eg 'true'
 
+class BlockedApp(Base):
+
+     __tablename__ = "blocked_apps"
+
+     id = Column(Integer, primary_key=True)
+     process_name = Column(String, unique = True, nullable = False)
+     created_at = Column(DateTime, default=datetime.now)
+
+def add_blocked_app(app_name):
+    """Adding App to blacklist if it doesn't exist"""
+    session = Session()
+
+    try:
+        query = session.query(BlockedApp).filter_by(process_name = app_name).first()
+
+        if not query:
+            new_app = BlockedApp(process_name = app_name)
+            session.add(new_app)
+            session.commit()
+            print(f"Added to blacklist: {app_name}")
+            return True
+        return False
+
+    except Exception as e:
+        print(f"Error adding app: {e}")
+
+    finally:
+        session.close()
+
+def remove_blocked_app(app_name):
+    """Remove App from blacklist"""
+    session = Session()
+
+    try:
+        app = session.query(BlockedApp).filter_by(process_name = app_name).first()
+
+        if app:
+            session.delete(app)
+            session.commit()
+            print(f"Removed from blacklist: {app_name}")
+
+    except Exception as e:
+        print(f"Error removing app: {e}")
+
+    finally:
+        session.close()
+
+def get_blocked_apps():
+    """returns a list of blacklisted apps"""
+    session = Session()
+
+    try:
+        apps = session.query(BlockedApp).all()
+
+        return[app.process_name for app in apps]
+
+    except Exception as e:
+        print(f"Error Fetching blacklist: {e}")
+        return[]
+
+    finally:
+        session.close()
+
+
+
 
 def init_db():
 
@@ -100,6 +165,26 @@ def init_db():
 
     except Exception as e:
         print(f"❌ CRITICAL DATABASE ERROR: {e}")
+
+
+def get_app_usage_state(limit=5):
+    session = Session()
+
+    try:
+        stats = session.query(
+            AppUsageLog.process_name,
+            func.sum(AppUsageLog.duration_seconds).label("total_time")
+        ).group_by(AppUsageLog.process_name).order_by(desc("total_time")).limit(limit).all()
+
+        return [{"name": s[0], "seconds": s[1]} for s in stats]
+
+    except Exception as e:
+        print(f"Stats Error: {e}")
+        return []
+
+    finally:
+        session.close()
+        
 
 if __name__ == "__main__":
     init_db()
