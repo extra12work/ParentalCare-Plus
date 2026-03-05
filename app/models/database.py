@@ -99,6 +99,7 @@ def add_blocked_app(app_name):
     finally:
         session.close()
 
+
 def remove_blocked_app(app_name):
     """Remove App from blacklist"""
     session = Session()
@@ -117,6 +118,7 @@ def remove_blocked_app(app_name):
     finally:
         session.close()
 
+
 def get_blocked_apps():
     """returns a list of blacklisted apps"""
     session = Session()
@@ -132,8 +134,6 @@ def get_blocked_apps():
 
     finally:
         session.close()
-
-
 
 
 def init_db():

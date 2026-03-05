@@ -72,8 +72,10 @@ class MainWindow(ctk.CTk):
         # Show Dashboard by default
         self.select_frame("dashboard")
 
+
     def _setup_sidebar(self):
         """Creates the left navigation panel"""
+
         self.sidebar_frame = ctk.CTkFrame(self, width=220, corner_radius=0, fg_color=GUNMETAL)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
 
@@ -91,8 +93,10 @@ class MainWindow(ctk.CTk):
         self.btn_settings = self._create_nav_button("Settings", "settings", 2)
         self.btn_stats = self._create_nav_button("Analytics", "stats", 3)
 
+
     def _create_nav_button(self, text, value, row):
         """Helper to create consistent sidebar buttons"""
+
         btn = ctk.CTkButton(
             self.sidebar_frame,
             text=text,
@@ -108,8 +112,10 @@ class MainWindow(ctk.CTk):
         btn.grid(row=row, column=0, padx=20, pady=10, sticky="ew")
         return btn
 
+
     def _setup_dashboard_frame(self):
         """Creates the Main Overview Page"""
+
         self.dashboard_frame = ctk.CTkFrame(self, fg_color=CARBON_BLACK, corner_radius=0)
 
         # Header
@@ -143,7 +149,9 @@ class MainWindow(ctk.CTk):
         )
         self.status_indicator.pack(pady=(5, 15))
 
+
     def _setup_stats_frame(self):
+
         self.stats_frame = ctk.CTkFrame(self, fg_color=CARBON_BLACK)
 
         # Page Title
@@ -155,9 +163,7 @@ class MainWindow(ctk.CTk):
         )
         label.pack(pady=20, padx=30, anchor="w")
 
-        # =======================
-        # ✅ NEW: Card Container (Styled Like Settings Page)
-        # =======================
+        # Card Container
         self.stats_card = ctk.CTkFrame(
             self.stats_frame,
             fg_color=GUNMETAL,
@@ -167,37 +173,28 @@ class MainWindow(ctk.CTk):
         )
         self.stats_card.pack(pady=20, padx=30, fill="both", expand=True)
 
-        # =======================
-        # ✅ NEW: Inner padding frame
-        # =======================
+        # Inner padding frame
         self.chart_frame = ctk.CTkFrame(
             self.stats_card,
             fg_color=GUNMETAL
         )
         self.chart_frame.pack(padx=25, pady=25, fill="both", expand=True)
 
-        # =======================
         # Matplotlib Setup
-        # =======================
         self.fig, self.ax = plt.subplots(figsize=(6, 4), dpi=100)
 
-        # ✅ CHANGED: Background now matches card
         self.fig.patch.set_facecolor(GUNMETAL)
         self.ax.set_facecolor(GUNMETAL)
 
-        # ✅ NEW: Remove extra borders for modern look
         self.ax.spines["top"].set_visible(False)
         self.ax.spines["right"].set_visible(False)
 
-        # ✅ NEW: Theme-colored axes
         self.ax.spines["bottom"].set_color(DUST_GREY)
         self.ax.spines["left"].set_color(DUST_GREY)
 
-        # ✅ NEW: Themed tick colors
         self.ax.tick_params(axis="x", colors=DUST_GREY)
         self.ax.tick_params(axis="y", colors=DUST_GREY)
 
-        # ✅ NEW: Subtle grid for premium look
         self.ax.grid(alpha=0.15)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.chart_frame)
@@ -205,8 +202,10 @@ class MainWindow(ctk.CTk):
 
         self.update_chart()
 
+
     def _setup_settings_frame(self):
         """Creates the Settings Page with Toggles"""
+
         self.settings_frame = ctk.CTkFrame(self, fg_color=CARBON_BLACK, corner_radius=0)
 
         label = ctk.CTkLabel(
@@ -268,6 +267,7 @@ class MainWindow(ctk.CTk):
 
         self.refresh_blocked_list()
 
+
     def add_app_to_blacklist(self):
         """UI Handler: Adds text from text to DB"""
 
@@ -310,16 +310,9 @@ class MainWindow(ctk.CTk):
         self.refresh_blocked_list()
 
 
-
-
-
-
-
-
-
-
     def select_frame(self, name):
         """Logic to switch between pages"""
+
         # Reset button colors
         self.btn_dashboard.configure(fg_color="transparent", text_color=DUST_GREY)
         self.btn_settings.configure(fg_color="transparent", text_color=DUST_GREY)
@@ -341,8 +334,10 @@ class MainWindow(ctk.CTk):
             self.stats_frame.grid(row=0, column=1, sticky="nsew")
             self.btn_stats.configure(fg_color=OLD_GOLD, text_color=CARBON_BLACK)
 
+
     def load_settings_from_db(self):
         """Reads initial state from database"""
+
         session = self.Session()
         try:
             app_setting = session.query(Settings).filter_by(key="app_blocker_enabled").first()
@@ -357,8 +352,10 @@ class MainWindow(ctk.CTk):
         finally:
             session.close()
 
+
     def save_settings_to_db(self):
         """Writes switch state to database"""
+
         session = self.Session()
         try:
             app_val = "true" if self.var_app_blocker.get() == "on" else "false"
@@ -378,8 +375,10 @@ class MainWindow(ctk.CTk):
         finally:
             session.close()
 
+
     def refresh_ui(self):
         """Updates the status card text based on settings"""
+
         if not self.running:
             return
 
@@ -395,12 +394,11 @@ class MainWindow(ctk.CTk):
 
         if hasattr(self, "ax"):
             self.update_chart()
-        # Schedule this function to run again in 2 seconds (Polling)
-        # This ensures if the database changes externally, the UI updates
-        # self.status_job = self.after(2000, self.update_system_status)
+
 
     def start_monitoring_loop(self):
         """The heartbeat that runs every 2 seconds"""
+
         if not self.running:
             return
 
@@ -418,11 +416,11 @@ class MainWindow(ctk.CTk):
 
         self.ax.clear()
 
-        # ✅ Ensure background remains styled after clear
+        # Ensure background remains styled after clear
         self.ax.set_facecolor(GUNMETAL)
         self.fig.patch.set_facecolor(GUNMETAL)
 
-        # ✅ Modern axis styling again after clear
+        # Modern axis styling again after clear
         self.ax.spines["top"].set_visible(False)
         self.ax.spines["right"].set_visible(False)
         self.ax.spines["bottom"].set_color(DUST_GREY)
@@ -430,7 +428,7 @@ class MainWindow(ctk.CTk):
         self.ax.tick_params(axis="x", colors=DUST_GREY, rotation=15)
         self.ax.tick_params(axis="y", colors=DUST_GREY)
 
-        # ✅ Subtle grid (premium dashboard style)
+        # Subtle grid (premium dashboard style)
         self.ax.grid(alpha=0.15)
 
         if not data:
@@ -441,7 +439,7 @@ class MainWindow(ctk.CTk):
         names = [item["name"] for item in data]
         values = [item["seconds"] / 60 for item in data]
 
-        # ✅ UPDATED: Slightly thicker bars for better visual weight
+        # Slightly thicker bars for better visual weight
         self.ax.bar(
             names,
             values,
@@ -453,7 +451,6 @@ class MainWindow(ctk.CTk):
         self.ax.set_ylabel("Minutes", color=DUST_GREY)
         self.ax.set_xlabel("App Names", color=DUST_GREY)
 
-        # ✅ UPDATED: Styled title
         self.ax.set_title(
             "Top 5 Applications (Minutes Used)",
             color=DUST_GREY,

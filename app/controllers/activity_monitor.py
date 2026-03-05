@@ -33,6 +33,7 @@ class ActivityMonitor():
         self.current_process = None
         self.start_time = None
 
+
     def get_active_window_info(self):
 
         try:

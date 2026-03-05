@@ -10,7 +10,7 @@ from datetime import datetime
 
 
 from sqlalchemy.orm import sessionmaker
-from app.models.database import engine , AppUsageLog , SecurityEvent
+from app.models.database import engine, AppUsageLog, SecurityEvent, Settings, BlockedApp
 
 
 class SecurityEngine():
@@ -25,9 +25,9 @@ class SecurityEngine():
 
         self.Session = sessionmaker(bind=engine)
 
-        raw_blocklist = ["Notepad.exe", "Discord.exe", "Steam.exe"]
+        # raw_blocklist = ["Notepad.exe", "Discord.exe", "Steam.exe"]
 
-        self.blocked_apps = [app.lower() for app in raw_blocklist]
+        # self.blocked_apps = [app.lower() for app in raw_blocklist]
 
     def log_security_event(self, event_type, target, details):
 
@@ -57,32 +57,57 @@ class SecurityEngine():
 
     def enforce_policy(self):
 
-        for proc in psutil.process_iter(['name','pid']):
+        # Check Master Switch
+        if not self._is_active():
+            return
 
-            # As we only asked for name and pid the kernel only sends us that saving us a lot of space and time
-            # as we have only asked for the data that we require
+        # Get Dynamic Blacklist
+        dynamic_blacklist = self._get_blocked_apps()
+        if not dynamic_blacklist:
+            return      # Nothing to Block
 
+        # Scanning Logic
+        for proc in psutil.process_iter(["name","pid"]):
             try:
                 proc_name = proc.info["name"]
 
-                if proc_name and proc_name .lower() in self.blocked_apps :
-                    # Checks for the existence of the process, if the process is in blocked list or not
-                    # And kill it, log it into the database
-
+                # Check against Dynamic list
+                if proc_name and proc_name.lower() in dynamic_blacklist:
                     pid = proc.info["pid"]
-                    proc.terminate()    # Terminates the process, polite kill signal
+                    proc.terminate()
 
-                    # Creates the Audit Record
                     self.log_security_event(
-                        event_type= "APP_KILL",
-                        target=proc_name,
-                        details=f"Terminated PID: {pid}"
+                        event_type = "APP_KILL",
+                        target = proc_name,
+                        details = f"Terminated PID: {pid}"
                     )
+
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                # Zombie process is process that dead but its information still remains
-                # The processes dies before we could kill it, or its a system process so we ignore them
                 pass
 
+
+    def _is_active(self):
+        """Checks the database to see if the master App Blocker switch is On"""
+
+        session = self.Session()
+        try:
+            setting = session.query(Settings).filter_by(key="app_blocker_enabled").first()
+            return setting and setting.value == "true"
+
+        finally:
+            session.close()
+
+
+    def _get_blocked_apps(self):
+        """Fetch the latest blacklist from the DB"""
+
+        session = self.Session()
+        try:
+            apps = session.query(BlockedApp).all()
+            return[app.process_name.lower() for app in apps]
+
+        finally:
+            session.close()
 
     def _security_loop(self):
 
