@@ -32,6 +32,7 @@ engine = create_engine(f'sqlite:///{DB_PATH}', echo=False)
 # we bind to engine so session know where to save
 Session = sessionmaker(bind=engine)
 
+# Analytics & Logging (The Eyes)
 class AppUsageLog(Base):
     __tablename__ = "app_usage"
 
@@ -53,84 +54,146 @@ class SecurityEvent(Base):
     target = Column(String)     # eg 'discord.exe'
     details = Column(String)    # eg 'Terminated PID: 1234'
 
+# Advanced Policies (The Rules)
+class AppPolicy(Base):
+
+     __tablename__ = "app_policies"
+
+     id = Column(Integer, primary_key=True)
+     app_name = Column(String, unique = True, nullable = False)
+     daily_limit_minutes = Column(Integer, default=30)      # 0 = Hard block
+     lockdown_immune = Column(Integer, default=0)           # 1 = True (Golden App)
+
+class WebPolicy(Base):
+
+    __tablename__ = "web_policies"
+
+    id = Column(Integer, primary_key=True)
+    keyword = Column(String, unique=True, nullable=False)
+    daily_limit_minutes = Column(Integer, default=30)       # 0 = Hard block
+
+class PhishingList(Base):
+
+    __tablename__ = "phishing_lists"
+
+    id = Column(Integer, primary_key=True)
+    domain = Column(String, unique=True, nullable=False)
+    list_tier = Column(String)      # "whitelist", "blacklist", "golden"
+
+# Negotiation & Triggers
 class NegotiationRequest(Base):
 
     __tablename__ = "negotiations"
 
     id = Column(Integer, primary_key=True)
     request_time = Column(DateTime, default=datetime.now)
-    app_name = Column(String)   # The app they want to use
-    requested_minutes = Column(Integer)     # How much time requested
-    status = Column(String)     # eg 'PENDING', 'APPROVED'
+    target_name = Column(String, nullable=False)
+    requested_minutes = Column(Integer, nullable=False)     # How much time requested
+    reason = Column(String)     # Child gives reasoning for unblocking the app
+    status = Column(String, default="PENDING")     # eg 'PENDING', 'APPROVED'
     parent_response_time = Column(DateTime)
 
+class TriggerEvent(Base):
+
+    __tablename__ = "trigger_events"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.now())
+    trigger_word = Column(String, nullable=False)
+    context_text = Column(String)
+    screenshot_path = Column(String)
+
+# Global Settings
 class Settings(Base):
 
     __tablename__ = "settings"
     key = Column(String, primary_key=True)      # eg 'app_blocker_enabled'
     value = Column(String)      # eg 'true'
 
-class BlockedApp(Base):
+# Helper Functions
 
-     __tablename__ = "blocked_apps"
-
-     id = Column(Integer, primary_key=True)
-     process_name = Column(String, unique = True, nullable = False)
-     created_at = Column(DateTime, default=datetime.now)
-
-def add_blocked_app(app_name):
-    """Adding App to blacklist if it doesn't exist"""
+def add_app_policy(app_name, limit_minutes):
+    """Adds or updates an app policy with a specific daily limit"""
     session = Session()
 
     try:
-        query = session.query(BlockedApp).filter_by(process_name = app_name).first()
+        # Check if the policy already exits
+        query = session.query(AppPolicy).filter_by(app_name = app_name).first()
 
-        if not query:
-            new_app = BlockedApp(process_name = app_name)
-            session.add(new_app)
-            session.commit()
-            print(f"Added to blacklist: {app_name}")
-            return True
-        return False
+        if query:
+            # Update existing limits
+            query.daily_limit_minutes = limit_minutes
+            print(f" 🔄️ Updated AppPolicy: {app_name} limit to {limit_minutes}m")
+        else:
+            # Create new Policy
+            
+             new_app = AppPolicy(app_name = app_name, daily_limit_minutes = limit_minutes)
+             session.add(new_app)
+             print(f" 🔒 Added to AppPolicy (Hard Block): {app_name}")
+
+        session.commit()
+        return True
+        
 
     except Exception as e:
-        print(f"Error adding app: {e}")
+        print(f"Error adding app policy: {e}")
 
     finally:
         session.close()
 
 
-def remove_blocked_app(app_name):
-    """Remove App from blacklist"""
+def remove_app_policy(app_name):
+    """Remove App from AppPolicy"""
     session = Session()
 
     try:
-        app = session.query(BlockedApp).filter_by(process_name = app_name).first()
+        app = session.query(AppPolicy).filter_by(app_name = app_name).first()
 
         if app:
             session.delete(app)
             session.commit()
-            print(f"Removed from blacklist: {app_name}")
+            print(f" 🔓 Removed AppPolicy: {app_name}")
 
     except Exception as e:
-        print(f"Error removing app: {e}")
+        print(f"Error removing app policy: {e}")
 
     finally:
         session.close()
 
 
-def get_blocked_apps():
-    """returns a list of blacklisted apps"""
+def get_app_policies():
+    """Returns a list with app names and their limits"""
     session = Session()
 
     try:
-        apps = session.query(BlockedApp).all()
+        apps = session.query(AppPolicy).all()
 
-        return[app.process_name for app in apps]
+        return[{"name": app.app_name, "limit": app.daily_limit_minutes} for app in apps]
 
     except Exception as e:
-        print(f"Error Fetching blacklist: {e}")
+        print(f"Error Fetching policies: {e}")
         return[]
+
+    finally:
+        session.close()
+
+
+def get_app_usage_state(limit=5):
+    """Returns stats for the UI Bar Chart"""
+
+    session = Session()
+
+    try:
+        stats = session.query(
+            AppUsageLog.process_name,
+            func.sum(AppUsageLog.duration_seconds).label("total_time")
+        ).group_by(AppUsageLog.process_name).order_by(desc("total_time")).limit(limit).all()
+
+        return [{"name": s[0], "seconds": s[1]} for s in stats]
+
+    except Exception as e:
+        print(f"Stats Error: {e}")
+        return []
 
     finally:
         session.close()
@@ -149,7 +212,10 @@ def init_db():
             "app_blocker_enabled": "true",
             "web_blocker_enabled": "true",
             "activity_monitor_enabled": "true",
-            "phishing_detection_enabled": "true"
+            "phishing_detection_enabled": "true",
+            "trigger_word_engine_enabled": "true",
+            "telegram_alerts_enabled": "false",
+            "telegram_bot_token": ""
         }
 
         # See for missing settings and add it
@@ -166,24 +232,21 @@ def init_db():
     except Exception as e:
         print(f"❌ CRITICAL DATABASE ERROR: {e}")
 
-
-def get_app_usage_state(limit=5):
+def get_known_apps():
+    """ Return al list of unique processes name the monitor has seen """
     session = Session()
-
     try:
-        stats = session.query(
-            AppUsageLog.process_name,
-            func.sum(AppUsageLog.duration_seconds).label("total_time")
-        ).group_by(AppUsageLog.process_name).order_by(desc("total_time")).limit(limit).all()
+        # Fetch distinct process name from the logs
+        apps = session.query(AppUsageLog.process_name).distinct().all()
 
-        return [{"name": s[0], "seconds": s[1]} for s in stats]
+        return sorted([app[0] for app in apps if app[0] and app[0] != "Unknown"] )
 
     except Exception as e:
-        print(f"Stats Error: {e}")
+        print(f" Error fetching known apps: {e}")
         return []
-
     finally:
         session.close()
+
         
 
 if __name__ == "__main__":

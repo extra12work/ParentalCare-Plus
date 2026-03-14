@@ -7,10 +7,14 @@ import psutil
 import threading
 import time
 from datetime import datetime
+import subprocess
+import sys
+import os
 
 
 from sqlalchemy.orm import sessionmaker
-from app.models.database import engine, AppUsageLog, SecurityEvent, Settings, BlockedApp
+from sqlalchemy import func
+from app.models.database import engine, AppUsageLog, SecurityEvent, Settings, AppPolicy, NegotiationRequest
 
 
 class SecurityEngine():
@@ -55,6 +59,36 @@ class SecurityEngine():
             # If we didn't close it, it will continue capturing the line and no other event will be logged in
             session.close()
 
+    def _is_negotiation_pending(self, app_name):
+        """ Checks if child has already asked for time for this app"""
+
+        session = self.Session()
+        try:
+            # Look for pending request for specific apps
+            pending = session.query(NegotiationRequest).filter_by(
+                target_name=app_name,
+                status="PENDING"
+            ).first()
+            return pending is not None
+
+        except Exception as e:
+            print(f"DB Error checking negotiation: {e} ")
+            return False
+
+        finally:
+            session.close()
+
+    def _trigger_negotiation_popup(self, app_name):
+        """Spawns the UI in a completely separate thread-safe process"""
+        print(f" 💬 Triggering Negotiation UI for {app_name}")
+
+        # We find exactly where the UI file is located dynamically
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        dialog_path = os.path.join(base_dir, "ui", "negotiation_dialog.py")
+
+        subprocess.Popen([sys.executable, dialog_path, app_name])
+
     def enforce_policy(self):
 
         # Check Master Switch
@@ -82,6 +116,9 @@ class SecurityEngine():
                         details = f"Terminated PID: {pid}"
                     )
 
+                    if not self._is_negotiation_pending(proc_name):
+                        self._trigger_negotiation_popup(proc_name)
+
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
 
@@ -99,12 +136,39 @@ class SecurityEngine():
 
 
     def _get_blocked_apps(self):
-        """Fetch the latest blacklist from the DB"""
+        """ Fetch hard-blocked apps AND apps that have exceeded their daily quota """
 
         session = self.Session()
         try:
-            apps = session.query(BlockedApp).all()
-            return[app.process_name.lower() for app in apps]
+            dynamic_blacklist = []
+
+            # Fetch all policies (both Hard Block and Quotas)
+            policies = session.query(AppPolicy).all()
+
+            # Get midnight of today so we only count today's screen time
+            today_start = datetime.combine(datetime.today(), datetime.min.time())
+
+            for policy in policies:
+                # if it is a Hard Block (0 mins), add it immediately
+                if policy.daily_limit_minutes == 0:
+                    dynamic_blacklist.append(policy.app_name.lower())
+                    continue
+
+                # If it has a quota, calculate total time used today
+                total_seconds = session.query(func.sum(AppUsageLog.duration_seconds)).filter(
+                    AppUsageLog.process_name.ilike(policy.app_name),
+                               AppUsageLog.start_time >= today_start
+                               ).scalar()
+
+                # Convert sec to min (default to 0 if no logs exist yet)
+                total_used_mins = (total_seconds or 0) / 60.0
+
+                # If they exceeded their limit, add to the kill list
+                if total_used_mins >= policy.daily_limit_minutes:
+                    dynamic_blacklist.append(policy.app_name.lower())
+
+            return dynamic_blacklist
+
 
         finally:
             session.close()

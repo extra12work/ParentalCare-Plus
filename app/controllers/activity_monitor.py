@@ -105,15 +105,17 @@ class ActivityMonitor():
         self.start_time = datetime.now()
 
         while self.running:
+
            try:
                 new_window, new_process = self.get_active_window_info()
 
+                # If the user switched to a new window
                 if new_window != self.current_window:
                     end_time = datetime.now()
 
                     self.log_session(
-                        new_window,
-                        new_process,
+                        self.current_window,
+                        self.current_process,
                         self.start_time,
                         end_time
                     )
@@ -121,6 +123,19 @@ class ActivityMonitor():
                     self.current_window = new_window
                     self.current_process = new_process
                     self.start_time = end_time
+
+                # time.sleep(self.interval)
+
+                # If they stayed on the same window, check how long it's been
+                else:
+
+                    current_duration = (datetime.now() - self.start_time).total_seconds()
+
+                    if current_duration >= 10.0:
+                        end_time = datetime.now()
+                        self.log_session(self.current_window, self.current_process, self.start_time, end_time)
+
+                        self.start_time = end_time
 
                 time.sleep(self.interval)
 

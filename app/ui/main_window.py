@@ -11,7 +11,7 @@ import customtkinter as ctk
 from sqlalchemy.orm import sessionmaker
 from app.models.database import (
     engine, Settings, get_app_usage_state,
-    add_blocked_app, remove_blocked_app, get_blocked_apps
+    add_app_policy, remove_app_policy, get_app_policies, get_known_apps
 )
 import threading
 import matplotlib.pyplot as plt
@@ -157,13 +157,51 @@ class MainWindow(ctk.CTk):
         # Page Title
         label = ctk.CTkLabel(
             self.stats_frame,
-            text="Real-Time Analytics",
+            text="Dynamic Analytics & Threat Dashboard",
             font=ctk.CTkFont(size=24, weight="bold"),
             text_color=DUST_GREY
         )
         label.pack(pady=20, padx=30, anchor="w")
 
-        # Card Container
+        # Control Panel
+        self.stats_control_frame = ctk.CTkFrame(
+            self.stats_frame,
+            fg_color="transparent"
+        )
+        self.stats_control_frame.pack(padx=30, fill="x")
+
+        self.current_metric = ctk.StringVar(value="App Usage (Time)")
+        self.current_chart_type = ctk.StringVar(value="Vertical Bar")
+
+        # Dropdown 1: Select the Data
+        self.metric_dropdown = ctk.CTkComboBox(
+            self.stats_control_frame,
+            values=["App Usage (Time)", "Blocked Web Attempts", "Trigger Word Alerts"],
+            variable=self.current_metric,
+            command=self.force_chart_update,
+            width=200,
+            fg_color=GUNMETAL,
+            text_color=DUST_GREY,
+            border_color=PINE_BLUE,
+            dropdown_fg_color=GUNMETAL
+        )
+        self.metric_dropdown.pack(side="left", padx=(0, 20))
+
+        # Dropdown 2: Select the Visual Style
+        self.chart_dropdown = ctk.CTkComboBox(
+            self.stats_control_frame,
+            values=["Vertical Bar", "Horizontal Bar", "Pie Chart"],
+            variable=self.current_chart_type,
+            command=self.force_chart_update,
+            width=150,
+            fg_color=GUNMETAL,
+            text_color=DUST_GREY,
+            border_color=PINE_BLUE,
+            dropdown_fg_color=GUNMETAL
+        )
+        self.chart_dropdown.pack(side="left")
+
+        # Chart Canvas
         self.stats_card = ctk.CTkFrame(
             self.stats_frame,
             fg_color=GUNMETAL,
@@ -173,7 +211,6 @@ class MainWindow(ctk.CTk):
         )
         self.stats_card.pack(pady=20, padx=30, fill="both", expand=True)
 
-        # Inner padding frame
         self.chart_frame = ctk.CTkFrame(
             self.stats_card,
             fg_color=GUNMETAL
@@ -182,25 +219,57 @@ class MainWindow(ctk.CTk):
 
         # Matplotlib Setup
         self.fig, self.ax = plt.subplots(figsize=(6, 4), dpi=100)
-
         self.fig.patch.set_facecolor(GUNMETAL)
         self.ax.set_facecolor(GUNMETAL)
-
-        self.ax.spines["top"].set_visible(False)
-        self.ax.spines["right"].set_visible(False)
-
-        self.ax.spines["bottom"].set_color(DUST_GREY)
-        self.ax.spines["left"].set_color(DUST_GREY)
-
-        self.ax.tick_params(axis="x", colors=DUST_GREY)
-        self.ax.tick_params(axis="y", colors=DUST_GREY)
-
-        self.ax.grid(alpha=0.15)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.chart_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
         self.update_chart()
+
+    def force_chart_update(self, choice):
+        """Helper to instantly redraw chart when a  dropdown changes"""
+
+        self.update_chart()
+
+        # # Card Container
+        # self.stats_card = ctk.CTkFrame(
+        #     self.stats_frame,
+        #     fg_color=GUNMETAL,
+        #     corner_radius=20,
+        #     border_width=1,
+        #     border_color="#2a2d2f"
+        # )
+        # self.stats_card.pack(pady=20, padx=30, fill="both", expand=True)
+        #
+        # # Inner padding frame
+        # self.chart_frame = ctk.CTkFrame(
+        #     self.stats_card,
+        #     fg_color=GUNMETAL
+        # )
+        # self.chart_frame.pack(padx=25, pady=25, fill="both", expand=True)
+        #
+        # # Matplotlib Setup
+        # self.fig, self.ax = plt.subplots(figsize=(6, 4), dpi=100)
+        #
+        # self.fig.patch.set_facecolor(GUNMETAL)
+        # self.ax.set_facecolor(GUNMETAL)
+        #
+        # self.ax.spines["top"].set_visible(False)
+        # self.ax.spines["right"].set_visible(False)
+        #
+        # self.ax.spines["bottom"].set_color(DUST_GREY)
+        # self.ax.spines["left"].set_color(DUST_GREY)
+        #
+        # self.ax.tick_params(axis="x", colors=DUST_GREY)
+        # self.ax.tick_params(axis="y", colors=DUST_GREY)
+        #
+        # self.ax.grid(alpha=0.15)
+        #
+        # self.canvas = FigureCanvasTkAgg(self.fig, master=self.chart_frame)
+        # self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        #
+        # self.update_chart()
 
 
     def _setup_settings_frame(self):
@@ -253,30 +322,86 @@ class MainWindow(ctk.CTk):
         input_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
         input_frame.pack(padx=30, fill="x")
 
-        self.app_entry = ctk.CTkEntry(input_frame, placeholder_text="e.g., discord.exe ",
-                                      text_color=DUST_GREY, fg_color=GUNMETAL, border_color=PINE_BLUE)
+        # Get apps the system has seen so far
+        known_apps = get_known_apps()
+        if not known_apps:
+            known_apps = ["Type or select app...."]
+
+        # Smart Dropdown
+        self.app_entry = ctk.CTkComboBox(
+            input_frame,
+            values=known_apps,
+            width=250,
+            text_color=DUST_GREY,
+            fg_color=GUNMETAL,
+            border_color=PINE_BLUE,
+            dropdown_fg_color=GUNMETAL,
+            dropdown_text_color=DUST_GREY
+        )
         self.app_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-        add_btn = ctk.CTkButton(input_frame, text="Block App", fg_color=OLD_GOLD, text_color=CARBON_BLACK,
-                                width=100, command=self.add_app_to_blacklist)
+        #
+
+        # self.app_entry = ctk.CTkEntry(
+        #     input_frame,
+        #     placeholder_text="e.g., discord.exe ",
+        #     text_color=DUST_GREY,
+        #     fg_color=GUNMETAL,
+        #     border_color=PINE_BLUE
+        # )
+        # self.app_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self.limit_entry = ctk.CTkEntry(
+            input_frame,
+            placeholder_text="Allowed Mins (0=Blocks) (e.g., 15)",
+            width=150,
+            text_color=DUST_GREY,
+            fg_color=GUNMETAL,
+            border_color=PINE_BLUE
+        )
+        self.limit_entry.pack(side="left", padx=(0,10))
+
+        add_btn = ctk.CTkButton(
+            input_frame,
+            text="Set Policy",
+            fg_color=OLD_GOLD,
+            text_color=CARBON_BLACK,
+            width=100,
+            command=self.add_app_to_blacklist
+        )
         add_btn.pack(side="right")
 
         # List Area
-        self.blacklist_frame = ctk.CTkScrollableFrame(self.settings_frame, fg_color=GUNMETAL, height=200)
+        self.blacklist_frame = ctk.CTkScrollableFrame(
+            self.settings_frame,
+            fg_color=GUNMETAL,
+            height=200
+        )
         self.blacklist_frame.pack(pady=20, padx=30, fill="both", expand=True)
 
         self.refresh_blocked_list()
 
 
     def add_app_to_blacklist(self):
-        """UI Handler: Adds text from text to DB"""
+        """UI Handler: Adds apps and limit to DB"""
 
         app_name = self.app_entry.get().strip()
+        raw_limit = self.limit_entry.get().strip()
 
         if app_name:
-            add_blocked_app(app_name)
-            self.app_entry.delete(0, "end")     #Clear Input
-            self.refresh_blocked_list()     # Update UI
+            try:
+                # Default to 0 (Hard Block) if they leave it blank
+                limit = int(raw_limit) if raw_limit else 0
+
+                add_app_policy(app_name, limit)
+                self.app_entry.set("")     #Clear Input
+                self.limit_entry.delete(0, "end")
+                self.refresh_blocked_list()     # Update UI
+
+            except ValueError:
+                self.limit_entry.configure(border_color="#cf4444")
+                self.limit_entry.delete(0, "end")
+                self.limit_entry.insert(0, "Invalid")
 
 
     def refresh_blocked_list(self):
@@ -287,26 +412,31 @@ class MainWindow(ctk.CTk):
             widget.destroy()
 
         # Get fresh data
-        apps = get_blocked_apps()
+        policies = get_app_policies()
 
-        if not apps:
-            ctk.CTkLabel(self.blacklist_frame, text="No app Blocked yet", text_color=DUST_GREY).pack(pady=20)
+        if not policies:
+            ctk.CTkLabel(self.blacklist_frame, text="No policies set yet", text_color=DUST_GREY).pack(pady=20)
             return
 
-        for app_name in apps:
+        for policy in policies:
             row = ctk.CTkFrame(self.blacklist_frame, fg_color="transparent")
             row.pack(fill="x", pady=5)
 
-            # Add Button
-            ctk.CTkLabel(row, text=app_name, text_color="white", anchor="w").pack(side="left", padx=10)
+            name = policy["name"]
+            limit = policy["limit"]
+            # Display format: discord.exe (Limit: 30mins)
+            display_text = f"{name} (Limit: {limit} mins)"
+            if limit == 0:
+                display_text = f"{name} (BLOCKED)"
+            ctk.CTkLabel(row, text=display_text, text_color="white", anchor="w").pack(side="left", padx=10)
 
             # Remove Button
             ctk.CTkButton(row, text="Remove", fg_color="#cf4444", width=60, height=25,
-                         command=lambda a=app_name: self.delete_app_from_blacklist(a)).pack(side="right", padx=10)
+                         command=lambda a=name: self.delete_app_from_blacklist(a)).pack(side="right", padx=10)
 
 
     def delete_app_from_blacklist(self, app_name):
-        remove_blocked_app(app_name)
+        remove_app_policy(app_name)
         self.refresh_blocked_list()
 
 
@@ -330,6 +460,11 @@ class MainWindow(ctk.CTk):
         elif name == "settings":
             self.settings_frame.grid(row=0, column=1, sticky="nsew")
             self.btn_settings.configure(fg_color=OLD_GOLD, text_color=CARBON_BLACK)
+
+            # Refresh dropdown list every time the setting tab is opened
+            fresh_apps = get_known_apps()
+            if fresh_apps:
+                self.app_entry.configure(values=fresh_apps)
         elif name == "stats":
             self.stats_frame.grid(row=0, column=1, sticky="nsew")
             self.btn_stats.configure(fg_color=OLD_GOLD, text_color=CARBON_BLACK)
@@ -412,53 +547,129 @@ class MainWindow(ctk.CTk):
         if not hasattr(self, "ax"):
             return
 
-        data = get_app_usage_state(limit=5)
+        metric = self.current_metric.get()
+        chart_type = self.current_chart_type.get()
 
-        self.ax.clear()
+        self.fig.clear()
 
         # Ensure background remains styled after clear
-        self.ax.set_facecolor(GUNMETAL)
         self.fig.patch.set_facecolor(GUNMETAL)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_facecolor(GUNMETAL)
 
-        # Modern axis styling again after clear
-        self.ax.spines["top"].set_visible(False)
-        self.ax.spines["right"].set_visible(False)
-        self.ax.spines["bottom"].set_color(DUST_GREY)
-        self.ax.spines["left"].set_color(DUST_GREY)
-        self.ax.tick_params(axis="x", colors=DUST_GREY, rotation=15)
-        self.ax.tick_params(axis="y", colors=DUST_GREY)
+        # Fetch Data based on Metric Dropdown
+        if metric == "App Usage (Time)":
+            data = get_app_usage_state(limit=5)
+            title = "Top 5 Applications (Minutes Used)"
+        elif metric == "Blocked Web Attempts":
+            data = []
+            title = "Blocked Web Attempts "
+        elif metric == "Trigger Word Alerts":
+            data = []
+            title = "Trigger Word Detections"
+        else:
+            data = []
+            title = "No Data"
 
-        # Subtle grid (premium dashboard style)
-        self.ax.grid(alpha=0.15)
+        # Handle Empty Data
 
         if not data:
-            self.ax.set_title("No Usage Data Available", color=DUST_GREY)
+            self.ax.spines["top"].set_visible(False)
+            self.ax.spines["right"].set_visible(False)
+            self.ax.spines["bottom"].set_visible(False)
+            self.ax.spines["left"].set_visible(False)
+            self.ax.set_xticks([])
+            self.ax.set_yticks([])
+            self.ax.text(0.5, 0.5, f"No Data Available for:\n{metric}",
+                         ha='center', va='center', color=DUST_GREY, fontsize=12)
+            self.ax.set_title(title, color=DUST_GREY, pad=15)
             self.canvas.draw()
             return
 
         names = [item["name"] for item in data]
         values = [item["seconds"] / 60 for item in data]
 
-        # Slightly thicker bars for better visual weight
-        self.ax.bar(
-            names,
-            values,
-            color=OLD_GOLD,
-            width=0.55,
-            edgecolor="#c9a636",
-            linewidth=1.2
-        )
-        self.ax.set_ylabel("Minutes", color=DUST_GREY)
-        self.ax.set_xlabel("App Names", color=DUST_GREY)
+        # Draw Visuals based on Chart Type Dropdown
+        if chart_type == "Pie Chart":
+            self.ax.pie(
+                values,
+                labels=names,
+                autopct="%1.1f%%",
+                colors=[OLD_GOLD, PINE_BLUE, "#8c5e58", "#5b6c5d", "#7a8b99"],
+                textprops={'color': DUST_GREY}
+            )
+        elif chart_type == "Horizontal Bar":
+            self.ax.spines["top"].set_visible(False)
+            self.ax.spines["right"].set_visible(False)
+            self.ax.spines["bottom"].set_color(DUST_GREY)
+            self.ax.spines["left"].set_color(DUST_GREY)
+            self.ax.tick_params(axis="x", colors=DUST_GREY)
+            self.ax.tick_params(axis="y", colors=DUST_GREY)
+            self.ax.grid(alpha=0.15)
 
-        self.ax.set_title(
-            "Top 5 Applications (Minutes Used)",
-            color=DUST_GREY,
-            fontsize=12,
-            pad=15
-        )
+            self.ax.barh(names, values, color=OLD_GOLD, edgecolor="#c9a636", height=0.55)
+            self.ax.set_xlabel("Minutes", color=DUST_GREY)
 
+        else:
+            self.ax.spines["top"].set_visible(False)
+            self.ax.spines["right"].set_visible(False)
+            self.ax.spines["bottom"].set_color(DUST_GREY)
+            self.ax.spines["left"].set_color(DUST_GREY)
+            # self.ax.tick_params(axis="x", colors=DUST_GREY, rotation=15)
+            # self.ax.tick_params(axis="y", colors=DUST_GREY)
+            # self.ax.grid(alpha=0.15)
+
+            self.ax.set_xticks(range(len(names)))
+            self.ax.set_xticklabels(names, rotation=35, ha="right", color=DUST_GREY)
+            self.ax.tick_params(axis="y", colors=DUST_GREY)
+            self.ax.grid(alpha=0.15)
+
+            self.ax.bar(names, values, color=OLD_GOLD, edgecolor="#c9a636", width=0.55)
+            self.ax.set_ylabel("Minutes", color=DUST_GREY)
+
+        self.ax.set_title(title, color=DUST_GREY, fontsize=12, pad=15)
+        self.fig.tight_layout()
         self.canvas.draw()
+
+        # # Modern axis styling again after clear
+        # self.ax.spines["top"].set_visible(False)
+        # self.ax.spines["right"].set_visible(False)
+        # self.ax.spines["bottom"].set_color(DUST_GREY)
+        # self.ax.spines["left"].set_color(DUST_GREY)
+        # self.ax.tick_params(axis="x", colors=DUST_GREY, rotation=15)
+        # self.ax.tick_params(axis="y", colors=DUST_GREY)
+        #
+        # # Subtle grid (premium dashboard style)
+        # self.ax.grid(alpha=0.15)
+        #
+        # if not data:
+        #     self.ax.set_title("No Usage Data Available", color=DUST_GREY)
+        #     self.canvas.draw()
+        #     return
+        #
+        # names = [item["name"] for item in data]
+        # values = [item["seconds"] / 60 for item in data]
+        #
+        # # Slightly thicker bars for better visual weight
+        # self.ax.bar(
+        #     names,
+        #     values,
+        #     color=OLD_GOLD,
+        #     width=0.55,
+        #     edgecolor="#c9a636",
+        #     linewidth=1.2
+        # )
+        # self.ax.set_ylabel("Minutes", color=DUST_GREY)
+        # self.ax.set_xlabel("App Names", color=DUST_GREY)
+        #
+        # self.ax.set_title(
+        #     "Top 5 Applications (Minutes Used)",
+        #     color=DUST_GREY,
+        #     fontsize=12,
+        #     pad=15
+        # )
+        #
+        # self.canvas.draw()
 
     def on_close(self):
         self.running = False
