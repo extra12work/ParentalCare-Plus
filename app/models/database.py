@@ -69,8 +69,9 @@ class WebPolicy(Base):
     __tablename__ = "web_policies"
 
     id = Column(Integer, primary_key=True)
-    keyword = Column(String, unique=True, nullable=False)
-    daily_limit_minutes = Column(Integer, default=30)       # 0 = Hard block
+    policy_type = Column(String, nullable=False)        # will store type like "domain", "keyword" or "category"
+    value = Column(String, nullable=False)      # will store actual values like "instagram.com", "proxysite" or "adult"
+    # daily_limit_minutes = Column(Integer, default=30)       # 0 = Hard block
 
 class PhishingList(Base):
 
@@ -177,6 +178,69 @@ def get_app_policies():
     finally:
         session.close()
 
+
+def add_web_policy(policy_type, value):
+    """checks for duplicate entries and add policies to web block list"""
+
+    session = Session()
+    try:
+        query = session.query(WebPolicy).filter_by(policy_type=policy_type, value=value).first()
+
+        if query:
+            print("Policy already exists")
+
+        else:
+            new_web_policy = WebPolicy(policy_type=policy_type, value=value)
+            session.add(new_web_policy)
+            print(f" 🔒 Added to WebPolicy : {new_web_policy.value}")
+
+        session.commit()
+        return True
+
+
+    except Exception as e:
+        print(f"Error adding web policy: {e}")
+
+    finally:
+        session.close()
+
+
+def remove_web_policy(policy_type, value):
+
+    session = Session()
+
+    # query = session.query(WebPolicy)filter_by(policy_type=policy_type, value=value).first()
+
+    try:
+        web_policy = session.query(WebPolicy).filter_by(policy_type=policy_type, value=value).first()
+
+        if web_policy:
+            session.delete(web_policy)
+            session.commit()
+            print(f" 🔓 Removed WebPolicy: {web_policy}")
+
+    except Exception as e:
+        print(f"Error removing web policy: {e}")
+
+    finally:
+        session.close()
+
+
+
+def get_web_policies():
+
+    session = Session()
+    try:
+
+        policies = session.query(WebPolicy).all()
+        return[{"type": p.policy_type, "value": p.value } for p in policies]
+
+    except Exception as e:
+        print(f"Error Fetching policies: {e}")
+        return[]
+
+    finally:
+        session.close()
 
 def get_app_usage_state(limit=5):
     """Returns stats for the UI Bar Chart"""

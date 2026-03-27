@@ -7,16 +7,21 @@
 # Phase 3 Step 1: The Graphical User Interface (View Layer)
 
 import sys
+import os
+import json
+import re
 import customtkinter as ctk
 from sqlalchemy.orm import sessionmaker
 from app.models.database import (
     engine, Settings, get_app_usage_state,
-    add_app_policy, remove_app_policy, get_app_policies, get_known_apps
+    add_app_policy, remove_app_policy, get_app_policies, get_known_apps,
+    add_web_policy, remove_web_policy, get_web_policies
 )
 import threading
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from app.utils.research_logger import ResearchLogger
+from app.controllers.web_filter import WebFilterEngine
 
 
 
@@ -35,6 +40,23 @@ OLD_GOLD = "#e2c044"  # Accents/Active State
 PINE_BLUE = "#587b7f"  # Secondary Accents
 
 
+FRIENDLY_APP_NAMES = {
+    "msedge.exe": "Microsoft Edge",
+    "chrome.exe": "Google Chrome",
+    "firefox.exe": "Mozilla Firefox",
+    "powerpnt.exe": "Microsoft PowerPoint",
+    "winword.exe": "Microsoft Word",
+    "excel.exe": "Microsoft Excel",
+    "discord.exe": "Discord",
+    "spotify.exe": "Spotify",
+    "robloxplayerbeta.exe": "Roblox",
+    "pycharm64.exe": "PyCharm IDE",
+    "explorer.exe": "Windows File Explorer",
+    "searchhost.exe": "Windows Search",
+    "applicationframehost.exe": "Windows System UI"
+}
+
+
 class MainWindow(ctk.CTk):
 
     def __init__(self):
@@ -48,7 +70,8 @@ class MainWindow(ctk.CTk):
         # 1. Database Connection
         # We create a private session factory for the UI thread
         self.Session = sessionmaker(bind=engine)
-        self.research = ResearchLogger
+        self.research = ResearchLogger()
+        self.web_filter = WebFilterEngine()
 
         # 2. Window Setup
         self.title("ParentalCare+ Dashboard")
@@ -68,6 +91,7 @@ class MainWindow(ctk.CTk):
         # 5. Start Polling (The Heartbeat)
         self.load_settings_from_db()
         self.start_monitoring_loop()
+        self.sync_web_engine()
 
         # Show Dashboard by default
         self.select_frame("dashboard")
@@ -116,7 +140,7 @@ class MainWindow(ctk.CTk):
     def _setup_dashboard_frame(self):
         """Creates the Main Overview Page"""
 
-        self.dashboard_frame = ctk.CTkFrame(self, fg_color=CARBON_BLACK, corner_radius=0)
+        self.dashboard_frame = ctk.CTkScrollableFrame(self, fg_color=CARBON_BLACK, corner_radius=0)
 
         # Header
         self.header_label = ctk.CTkLabel(
@@ -126,6 +150,7 @@ class MainWindow(ctk.CTk):
             text_color=DUST_GREY
         )
         self.header_label.pack(pady=20, padx=30, anchor="w")
+
 
         # Status Card (Visual Indicator of System Health)
         self.status_card = ctk.CTkFrame(
@@ -138,7 +163,7 @@ class MainWindow(ctk.CTk):
         self.status_card.pack(pady=10, padx=30, fill="x")
 
         self.status_title = ctk.CTkLabel(
-            self.status_card, text="PROTECTION STATUS",
+            self.status_card, text="CORE PROTECTION ENGINE",
             font=ctk.CTkFont(size=12, weight="bold"), text_color=PINE_BLUE
         )
         self.status_title.pack(pady=(15, 0))
@@ -148,6 +173,56 @@ class MainWindow(ctk.CTk):
             font=ctk.CTkFont(size=28, weight="bold"), text_color=DUST_GREY
         )
         self.status_indicator.pack(pady=(5, 15))
+
+
+        # Quick Stats row
+
+        stats_row = ctk.CTkFrame(self.dashboard_frame, fg_color="transparent")
+        stats_row.pack(pady=10, padx=30, fill="x")
+
+        # Stat 1
+        stat1 = ctk.CTkFrame(stats_row, fg_color=GUNMETAL, corner_radius=10)
+        stat1.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        stat1_label = ctk.CTkLabel(stat1, text="Active App Rules", font=ctk.CTkFont(size=11), text_color=DUST_GREY )
+        stat1_label.pack(pady=(10, 0))
+        self.stat_app = ctk.CTkLabel(stat1, text="0", font=ctk.CTkFont(size=24, weight="bold"), text_color=OLD_GOLD)
+        self.stat_app.pack(pady=(0, 10))
+
+        # Stat 2
+        stat2 = ctk.CTkFrame(stats_row, fg_color=GUNMETAL, corner_radius=10)
+        stat2.pack(side="left", fill="both", expand=True, padx=5)
+        stat2_label = ctk.CTkLabel(stat2, text="Active Web Rules", font=ctk.CTkFont(size=11), text_color=DUST_GREY)
+        stat2_label.pack(pady=(10, 0))
+        self.stat_web = ctk.CTkLabel(stat2, text="0", font=ctk.CTkFont(size=24, weight="bold"), text_color=OLD_GOLD)
+        self.stat_web.pack(pady=(0, 10))
+
+        # Stat 3
+        stat3 = ctk.CTkFrame(stats_row, fg_color=GUNMETAL, corner_radius=10)
+        stat3.pack(side="left", fill="both", expand=True, padx=(5, 0))
+        stat3_label = ctk.CTkLabel(stat3, text="Threats Blocked", font=ctk.CTkFont(size=11), text_color=DUST_GREY)
+        stat3_label.pack(pady=(10, 0))
+        self.stat_threats = ctk.CTkLabel(stat3, text="0", font=ctk.CTkFont(size=24, weight="bold"), text_color=OLD_GOLD)
+        self.stat_threats.pack(pady=(0, 10))
+
+
+        # Live Security Feed (Mini-log)
+        feed_label = ctk.CTkLabel(
+            self.dashboard_frame,
+            text="Recent Security Events",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=DUST_GREY
+        )
+        feed_label.pack(pady=(20, 0), padx=30, anchor="w")
+
+        self.feed_frame = ctk.CTkFrame(self.dashboard_frame, fg_color=GUNMETAL, corner_radius=10, height=150)
+        self.feed_frame.pack(pady=5, padx=20, fill="both", expand=True)
+
+        placeholder = ctk.CTkLabel(self.feed_frame, text=" 🟢 System monitoring active. No recent threats detected", text_color=DUST_GREY)
+        placeholder.pack(pady=20)
+
+
+
+
 
 
     def _setup_stats_frame(self):
@@ -232,50 +307,11 @@ class MainWindow(ctk.CTk):
 
         self.update_chart()
 
-        # # Card Container
-        # self.stats_card = ctk.CTkFrame(
-        #     self.stats_frame,
-        #     fg_color=GUNMETAL,
-        #     corner_radius=20,
-        #     border_width=1,
-        #     border_color="#2a2d2f"
-        # )
-        # self.stats_card.pack(pady=20, padx=30, fill="both", expand=True)
-        #
-        # # Inner padding frame
-        # self.chart_frame = ctk.CTkFrame(
-        #     self.stats_card,
-        #     fg_color=GUNMETAL
-        # )
-        # self.chart_frame.pack(padx=25, pady=25, fill="both", expand=True)
-        #
-        # # Matplotlib Setup
-        # self.fig, self.ax = plt.subplots(figsize=(6, 4), dpi=100)
-        #
-        # self.fig.patch.set_facecolor(GUNMETAL)
-        # self.ax.set_facecolor(GUNMETAL)
-        #
-        # self.ax.spines["top"].set_visible(False)
-        # self.ax.spines["right"].set_visible(False)
-        #
-        # self.ax.spines["bottom"].set_color(DUST_GREY)
-        # self.ax.spines["left"].set_color(DUST_GREY)
-        #
-        # self.ax.tick_params(axis="x", colors=DUST_GREY)
-        # self.ax.tick_params(axis="y", colors=DUST_GREY)
-        #
-        # self.ax.grid(alpha=0.15)
-        #
-        # self.canvas = FigureCanvasTkAgg(self.fig, master=self.chart_frame)
-        # self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        #
-        # self.update_chart()
-
 
     def _setup_settings_frame(self):
         """Creates the Settings Page with Toggles"""
 
-        self.settings_frame = ctk.CTkFrame(self, fg_color=CARBON_BLACK, corner_radius=0)
+        self.settings_frame = ctk.CTkScrollableFrame(self, fg_color=CARBON_BLACK, corner_radius=0)
 
         label = ctk.CTkLabel(
             self.settings_frame, text="Configuration",
@@ -314,7 +350,7 @@ class MainWindow(ctk.CTk):
         self.sw_web.pack(pady=20, padx=20, anchor="w")
 
 
-        # Blacklist Session
+        # App Blacklist Session
         ctk.CTkLabel(self.settings_frame, text = "Blocked Applications",
                      font = ctk.CTkFont(size=18, weight="bold"), text_color=DUST_GREY).pack(pady=(30, 10), padx=30, anchor="w")
 
@@ -324,13 +360,17 @@ class MainWindow(ctk.CTk):
 
         # Get apps the system has seen so far
         known_apps = get_known_apps()
+        display_apps = []
+        for app in known_apps:
+            display_apps.append(self.get_friendly_name(app))
+
         if not known_apps:
             known_apps = ["Type or select app...."]
 
         # Smart Dropdown
         self.app_entry = ctk.CTkComboBox(
             input_frame,
-            values=known_apps,
+            values=display_apps,
             width=250,
             text_color=DUST_GREY,
             fg_color=GUNMETAL,
@@ -340,16 +380,6 @@ class MainWindow(ctk.CTk):
         )
         self.app_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-        #
-
-        # self.app_entry = ctk.CTkEntry(
-        #     input_frame,
-        #     placeholder_text="e.g., discord.exe ",
-        #     text_color=DUST_GREY,
-        #     fg_color=GUNMETAL,
-        #     border_color=PINE_BLUE
-        # )
-        # self.app_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
         self.limit_entry = ctk.CTkEntry(
             input_frame,
@@ -381,19 +411,106 @@ class MainWindow(ctk.CTk):
 
         self.refresh_blocked_list()
 
+        # Web and keyword Blacklist session
+
+        ctk.CTkLabel(self.settings_frame, text="Web & Keyword Filter",
+                     font=ctk.CTkFont(size=18, weight="bold"), text_color=DUST_GREY).pack(pady=(30, 10), padx=30,
+                                                                                          anchor="w")
+
+        # Input Area
+        web_input_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        web_input_frame.pack(padx=30, fill="x")
+
+
+        # Smart Dropdown
+        self.web_type_combo = ctk.CTkComboBox(
+            web_input_frame,
+            values=["domain", "keyword", "category"],
+            width=120,
+            text_color=DUST_GREY,
+            fg_color=GUNMETAL,
+            border_color=PINE_BLUE,
+            dropdown_fg_color=GUNMETAL,
+            dropdown_text_color=DUST_GREY
+        )
+        self.web_type_combo.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+
+        self.web_value_entry = ctk.CTkEntry(
+            web_input_frame,
+            placeholder_text="e.g., instagram.com or Adult ",
+            text_color=DUST_GREY,
+            fg_color=GUNMETAL,
+            border_color=PINE_BLUE
+        )
+        self.web_value_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        add_web_btn = ctk.CTkButton(
+            web_input_frame,
+            text="Add Rule",
+            fg_color=OLD_GOLD,
+            text_color=CARBON_BLACK,
+            width=100,
+            command=self.add_web_to_blacklist
+        )
+        add_web_btn.pack(side="right")
+
+        # List Area
+        self.web_list_frame = ctk.CTkScrollableFrame(
+            self.settings_frame,
+            fg_color=GUNMETAL,
+            height=200
+        )
+        self.web_list_frame.pack(pady=20, padx=30, fill="both", expand=True)
+
+        self.refresh_web_list()
+
+
+    def get_friendly_name(self, exe_name):
+        """ Dynamically translate .exe names into readable titles """
+
+        lower_exe = exe_name.lower()
+        if lower_exe in FRIENDLY_APP_NAMES:
+            return FRIENDLY_APP_NAMES[lower_exe]
+
+        # Dynamic regex parser (removes .exe)
+        name_no_ext = exe_name.replace(".exe", "").replace(".EXE", "")
+
+        # Add space before any Capital letter
+        name_spaced = re.sub(r'(?<!^)(?=[A-Z])', '', name_no_ext)
+
+        # Replace underscore and dash with space and capitalize every word
+        name_clean = name_spaced.replace("_", "").replace("-", "").title()
+
+        return name_clean
+
 
     def add_app_to_blacklist(self):
         """UI Handler: Adds apps and limit to DB"""
 
-        app_name = self.app_entry.get().strip()
+        selected_name = self.app_entry.get().strip()
         raw_limit = self.limit_entry.get().strip()
 
-        if app_name:
+        if selected_name:
             try:
+
+                app_exe = selected_name
+                known_apps = get_known_apps()
+
+                # Check if it matches a friendly name of a known app
+                for raw_app in known_apps:
+                    if self.get_friendly_name(raw_app).lower() == selected_name.lower():
+                        app_exe = raw_app
+                        break
+
+                for raw_app, friendly in FRIENDLY_APP_NAMES.items():
+                    if friendly.lower() == selected_name.lower():
+                        app_exe = raw_app
+                        break
                 # Default to 0 (Hard Block) if they leave it blank
                 limit = int(raw_limit) if raw_limit else 0
 
-                add_app_policy(app_name, limit)
+                add_app_policy(app_exe, limit)
                 self.app_entry.set("")     #Clear Input
                 self.limit_entry.delete(0, "end")
                 self.refresh_blocked_list()     # Update UI
@@ -422,22 +539,120 @@ class MainWindow(ctk.CTk):
             row = ctk.CTkFrame(self.blacklist_frame, fg_color="transparent")
             row.pack(fill="x", pady=5)
 
-            name = policy["name"]
+            name_exe = policy["name"]
             limit = policy["limit"]
+            friendly_name = self.get_friendly_name(name_exe)
             # Display format: discord.exe (Limit: 30mins)
-            display_text = f"{name} (Limit: {limit} mins)"
+            display_text = f"{friendly_name} (Limit: {limit} mins)"
             if limit == 0:
-                display_text = f"{name} (BLOCKED)"
+                display_text = f"{friendly_name} (BLOCKED)"
             ctk.CTkLabel(row, text=display_text, text_color="white", anchor="w").pack(side="left", padx=10)
 
             # Remove Button
             ctk.CTkButton(row, text="Remove", fg_color="#cf4444", width=60, height=25,
-                         command=lambda a=name: self.delete_app_from_blacklist(a)).pack(side="right", padx=10)
+                         command=lambda a=name_exe: self.delete_app_from_blacklist(a)).pack(side="right", padx=10)
 
 
     def delete_app_from_blacklist(self, app_name):
         remove_app_policy(app_name)
         self.refresh_blocked_list()
+
+
+    def add_web_to_blacklist(self):
+        """UI Handler: Adds domain and keyword to DB"""
+
+        policy_type = self.web_type_combo.get()
+        value = self.web_value_entry.get().strip()
+
+        if value:
+            try:
+                add_web_policy(policy_type, value)
+                self.web_value_entry.delete(0, "end")
+                self.refresh_web_list()
+                self.sync_web_engine()
+
+            except ValueError:
+                self.limit_entry.configure(border_color="#cf4444")
+                self.limit_entry.delete(0, "end")
+                self.limit_entry.insert(0, "Invalid")
+
+
+
+    def refresh_web_list(self):
+        """UI Handler: Re-draws the list from DB"""
+
+        for widget in self.web_list_frame.winfo_children():
+            widget.destroy()
+
+        policies = get_web_policies()
+
+        for policy in policies:
+            row = ctk.CTkFrame(self.web_list_frame, fg_color="transparent")
+            row.pack(fill="x", pady=5)
+
+            type = policy["type"]
+            value = policy["value"]
+            display_text = f"[{type}] {value}"
+
+            ctk.CTkLabel(row, text=display_text, text_color="white", anchor="w").pack(side="left", padx=10)
+
+            # Remove Button
+            ctk.CTkButton(row, text="Remove", fg_color="#cf4444", width=60, height=25,
+                          command=lambda t=type, v=value: self.delete_web_from_blacklist(t,v)).pack(side="right", padx=10)
+
+
+    def delete_web_from_blacklist(self, policy_type, value):
+        remove_web_policy(policy_type, value)
+        self.refresh_web_list()
+        self.sync_web_engine()
+
+    def sync_web_engine(self):
+        """Reads the DB and pushes the rules to the Web Filter Engine"""
+        policies = get_web_policies()
+
+        domains_to_block = []
+        keywords_to_block = []
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        categories_path = os.path.join(base_dir, '../../data/web_categories.json')
+
+        try:
+            with open(categories_path, mode="r") as f:
+                category_data = json.load(f)
+
+        except Exception as e:
+            print(f" ⚠️ Could not load web categories: {e}")
+            category_data = {}
+
+
+        for p in policies:
+            if p["type"] == "domain":
+                domains_to_block.append(p["value"])
+            elif p["type"] == "keyword":
+                keywords_to_block.append(p["value"])
+            elif p["type"] == "category":
+
+                cat_name = p["value"]
+                if cat_name in category_data:
+                    # Blocks exact domain in the DNS firewall
+                    domains_to_block.extend(category_data[cat_name])
+
+                    # Extracts the core word and adds them to keyword blocker
+                    for domain in category_data[cat_name]:
+                        core_word = domain.split(".")[0]        # It gets "roblox" from "roblox.com" so we can ban if its "roblox.in" or any other domain
+                        if core_word not in keywords_to_block:
+                            keywords_to_block.append(core_word)
+                else:
+                    print(f" ⚠️ Category '{cat_name}' not found in JSON data. ")
+
+        # Update the engine
+        self.web_filter.update_hosts_file(domains_to_block)
+        self.web_filter.set_banned_keywords(keywords_to_block)
+
+        if self.var_web_blocker.get() == "on":
+            self.web_filter.start_scanner()
+        else:
+            self.web_filter.stop_scanner()
 
 
     def select_frame(self, name):
@@ -464,7 +679,8 @@ class MainWindow(ctk.CTk):
             # Refresh dropdown list every time the setting tab is opened
             fresh_apps = get_known_apps()
             if fresh_apps:
-                self.app_entry.configure(values=fresh_apps)
+                translated_apps = [self.get_friendly_name(a) for a in fresh_apps]
+                self.app_entry.configure(values=translated_apps)
         elif name == "stats":
             self.stats_frame.grid(row=0, column=1, sticky="nsew")
             self.btn_stats.configure(fg_color=OLD_GOLD, text_color=CARBON_BLACK)
@@ -529,6 +745,18 @@ class MainWindow(ctk.CTk):
 
         if hasattr(self, "ax"):
             self.update_chart()
+
+        try:
+            # Update the Quick Feed numbers
+            app_count = len(get_app_policies())
+            web_count = len(get_web_policies())
+
+            if hasattr(self, 'stat_app'):
+                self.stat_app.configure(text=str(app_count))
+                self.stat_web.configure(text=str(web_count))
+
+        except Exception :
+            pass
 
 
     def start_monitoring_loop(self):
@@ -598,6 +826,7 @@ class MainWindow(ctk.CTk):
                 colors=[OLD_GOLD, PINE_BLUE, "#8c5e58", "#5b6c5d", "#7a8b99"],
                 textprops={'color': DUST_GREY}
             )
+            self.ax.axis("equal")
         elif chart_type == "Horizontal Bar":
             self.ax.spines["top"].set_visible(False)
             self.ax.spines["right"].set_visible(False)
@@ -628,7 +857,7 @@ class MainWindow(ctk.CTk):
             self.ax.set_ylabel("Minutes", color=DUST_GREY)
 
         self.ax.set_title(title, color=DUST_GREY, fontsize=12, pad=15)
-        self.fig.tight_layout()
+        self.fig.tight_layout(pad=2.0)
         self.canvas.draw()
 
         # # Modern axis styling again after clear

@@ -29,6 +29,8 @@ class SecurityEngine():
 
         self.Session = sessionmaker(bind=engine)
 
+        self.negotiation_cooldowns = {}
+
         # raw_blocklist = ["Notepad.exe", "Discord.exe", "Steam.exe"]
 
         # self.blocked_apps = [app.lower() for app in raw_blocklist]
@@ -116,8 +118,18 @@ class SecurityEngine():
                         details = f"Terminated PID: {pid}"
                     )
 
-                    if not self._is_negotiation_pending(proc_name):
-                        self._trigger_negotiation_popup(proc_name)
+                    current_time = time.time()
+                    # Check when we last triggered a popup for this specific app
+                    last_triggered = self.negotiation_cooldowns.get(proc_name.lower(), 0)
+
+                    # Only check the db and trigger the UI if 60 seconds has passed
+                    if current_time - last_triggered > 60:
+                        if not self._is_negotiation_pending(proc_name):
+                            self._trigger_negotiation_popup(proc_name)
+                            self.negotiation_cooldowns[proc_name.lower()] = current_time
+
+                    else:
+                        pass
 
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
