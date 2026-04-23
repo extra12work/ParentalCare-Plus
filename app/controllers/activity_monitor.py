@@ -17,10 +17,11 @@ from app.models.database import engine, AppUsageLog
 
 class ActivityMonitor():
 
-    def __init__(self, interval=1):
+    def __init__(self, interval=1, lockdown_mode=False):
         self.interval = interval   # Interval after which it checks for the current active window
         self.running = False    # Master switch, Tells if the loop is active or not
         self.thread = None      # Background thread object
+        self.lockdown_mode = lockdown_mode
 
         # Database Connection
         # We create a Session factory bound to the engine we imported

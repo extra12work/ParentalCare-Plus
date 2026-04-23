@@ -19,17 +19,23 @@ from app.models.database import engine, AppUsageLog, SecurityEvent, Settings, Ap
 
 class SecurityEngine():
 
-    def __init__(self, interval=2):
+    def __init__(self, interval=2, lockdown_mode=False):
 
         # We took 2 seconds because it's not too frequent to use up the cpu in whole,
         # and it's not too slow so the blocked app can't be used
         self.interval = interval
         self.running = False    #master switch for the system
         self.thread = None
+        self.lockdown_mode = lockdown_mode
 
         self.Session = sessionmaker(bind=engine)
-
         self.negotiation_cooldowns = {}
+
+        # THE WHITELIST: Apps allowed to run during Lockdown
+        self.whitelist = [
+            "explorer.exe", "searchhost.exe", "applicationframehost.exe",
+            "python.exe", "pycharm64.exe", "cmd.exe", "conhost.exe"
+        ]
 
         # raw_blocklist = ["Notepad.exe", "Discord.exe", "Steam.exe"]
 
@@ -91,47 +97,106 @@ class SecurityEngine():
 
         subprocess.Popen([sys.executable, dialog_path, app_name])
 
-    def enforce_policy(self):
+    def _is_system_process(self, proc):
+        """Determines if a process belongs to Windows itself to prevent OS crashes"""
+        try:
+            proc_name = proc.name().lower()
+        except:
+            return True  # If we can't even read the name, leave it alone
 
-        # Check Master Switch
+        # 1. Explicit list of untouchable core Windows processes
+        critical_procs = [
+            "taskmgr.exe", "explorer.exe", "systemsettings.exe", "svchost.exe",
+            "csrss.exe", "wininit.exe", "winlogon.exe", "smss.exe", "services.exe",
+            "lsass.exe", "fontdrvhost.exe", "dwm.exe", "spoolsv.exe", "searchui.exe"
+        ]
+        if proc_name in critical_procs:
+            return True
+
+        # 2. Check the path
+        try:
+            exe_path = proc.exe()
+            if exe_path and exe_path.lower().startswith("c:\\windows"):
+                return True
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            # Do NOT return True here anymore!
+            pass
+
+        return False
+
+    def enforce_policy(self):
+        # --- 1. EMERGENCY LOCKDOWN MODE (The Whitelist Sniper) ---
+        if self.lockdown_mode:
+            for proc in psutil.process_iter(["name", "pid"]):
+                try:
+                    # 1. Safely grab the name from memory (No dangerous OS calls)
+                    proc_name = proc.info.get("name")
+                    if not proc_name:
+                        continue
+
+                    proc_name_lower = proc_name.lower()
+
+                    # 2. Hardcoded System Survival List (Never touch these)
+                    critical_procs = [
+                        "taskmgr.exe", "explorer.exe", "systemsettings.exe", "svchost.exe",
+                        "csrss.exe", "wininit.exe", "winlogon.exe", "smss.exe", "services.exe",
+                        "lsass.exe", "fontdrvhost.exe", "dwm.exe", "spoolsv.exe", "searchui.exe",
+                        "searchhost.exe", "applicationframehost.exe", "conhost.exe", "cmd.exe"
+                    ]
+                    if proc_name_lower in critical_procs:
+                        continue
+
+                    # 3. Check our Custom Whitelist
+                    if proc_name_lower in self.whitelist:
+                        continue
+
+                    # 4. Check if it lives in the Windows folder
+                    try:
+                        exe_path = proc.exe()
+                        if exe_path and exe_path.lower().startswith("c:\\windows"):
+                            continue
+                    except (psutil.AccessDenied, psutil.NoSuchProcess):
+                        # If Windows denies us the path, we assume it's just a standard app. Let it pass to the sniper!
+                        pass
+
+                    # 5. If it survived all checks, it's unauthorized. KILL IT.
+                    pid = proc.info.get("pid")
+                    proc.kill()
+                    print(f"💥 LOCKDOWN SNIPER: Terminated {proc_name} (PID: {pid})")
+                    self.log_security_event("LOCKDOWN_KILL", proc_name, f"Blocked by Whitelist (PID: {pid})")
+
+                except Exception as e:
+                    # FIX: Broad exception catch! If one weird process throws an OS Error,
+                    # the loop simply ignores it and moves to the next process.
+                    pass
+
+            return  # Skip the normal blacklist if we are in lockdown!
+
+        # --- 2. NORMAL MODE (The Blacklist) ---
         if not self._is_active():
             return
 
-        # Get Dynamic Blacklist
         dynamic_blacklist = self._get_blocked_apps()
         if not dynamic_blacklist:
-            return      # Nothing to Block
+            return
 
-        # Scanning Logic
-        for proc in psutil.process_iter(["name","pid"]):
+        for proc in psutil.process_iter(["name", "pid"]):
             try:
-                proc_name = proc.info["name"]
-
-                # Check against Dynamic list
+                proc_name = proc.info.get("name")
                 if proc_name and proc_name.lower() in dynamic_blacklist:
-                    pid = proc.info["pid"]
-                    proc.terminate()
-
-                    self.log_security_event(
-                        event_type = "APP_KILL",
-                        target = proc_name,
-                        details = f"Terminated PID: {pid}"
-                    )
+                    pid = proc.info.get("pid")
+                    proc.kill()
+                    self.log_security_event("APP_KILL", proc_name, f"Terminated PID: {pid}")
 
                     current_time = time.time()
-                    # Check when we last triggered a popup for this specific app
                     last_triggered = self.negotiation_cooldowns.get(proc_name.lower(), 0)
 
-                    # Only check the db and trigger the UI if 60 seconds has passed
                     if current_time - last_triggered > 60:
                         if not self._is_negotiation_pending(proc_name):
                             self._trigger_negotiation_popup(proc_name)
                             self.negotiation_cooldowns[proc_name.lower()] = current_time
 
-                    else:
-                        pass
-
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            except Exception:
                 pass
 
 

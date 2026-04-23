@@ -15,7 +15,8 @@ from sqlalchemy.orm import sessionmaker
 from app.models.database import (
     engine, Settings, get_app_usage_state,
     add_app_policy, remove_app_policy, get_app_policies, get_known_apps,
-    add_web_policy, remove_web_policy, get_web_policies
+    add_web_policy, remove_web_policy, get_web_policies, get_web_block_stats,
+    get_trigger_word_stats
 )
 import threading
 import matplotlib.pyplot as plt
@@ -59,13 +60,18 @@ FRIENDLY_APP_NAMES = {
 
 class MainWindow(ctk.CTk):
 
-    def __init__(self):
+    def __init__(self, lockdown_mode=False):
         super().__init__()
 
         # Kill Switch
         self.running = True
         self.status_job = None
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.lockdown_mode = lockdown_mode
+
+        if self.lockdown_mode:
+            self.protocol("WM_DELETE_WINDOW", self.disable_event)
+        else:
+            self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # 1. Database Connection
         # We create a private session factory for the UI thread
@@ -96,6 +102,17 @@ class MainWindow(ctk.CTk):
         # Show Dashboard by default
         self.select_frame("dashboard")
 
+        # --- Child Window Management ---
+        if self.lockdown_mode:
+            self.withdraw()  # Hide the main dashboard completely
+            LockdownWindow(self)  # Spawn the child lockdown window
+        else:
+            self.withdraw()  # Hide the main dashboard temporarily
+            LoginWindow(self)  # Spawn the child login window
+
+    def disable_event(self):
+        """Silently ignores clicks on the 'X' button during lockdown"""
+        pass
 
     def _setup_sidebar(self):
         """Creates the left navigation panel"""
@@ -143,11 +160,18 @@ class MainWindow(ctk.CTk):
         self.dashboard_frame = ctk.CTkScrollableFrame(self, fg_color=CARBON_BLACK, corner_radius=0)
 
         # Header
+        header_text = "System Overview"
+        header_color = DUST_GREY
+
+        if getattr(self, 'lockdown_mode', False):
+            header_text = "🚨 SYSTEM IN STRICT LOCKDOWN 🚨"
+            header_color = "#cf4444"  # Red alert color
+
         self.header_label = ctk.CTkLabel(
             self.dashboard_frame,
-            text="System Overview",
+            text=header_text,
             font=ctk.CTkFont(size=24, weight="bold"),
-            text_color=DUST_GREY
+            text_color=header_color
         )
         self.header_label.pack(pady=20, padx=30, anchor="w")
 
@@ -219,9 +243,6 @@ class MainWindow(ctk.CTk):
 
         placeholder = ctk.CTkLabel(self.feed_frame, text=" 🟢 System monitoring active. No recent threats detected", text_color=DUST_GREY)
         placeholder.pack(pady=20)
-
-
-
 
 
 
@@ -771,148 +792,302 @@ class MainWindow(ctk.CTk):
         self.status_job = self.after(2000, self.start_monitoring_loop)
 
     def update_chart(self):
-
-        if not hasattr(self, "ax"):
+        if not hasattr(self, "fig"):
             return
 
         metric = self.current_metric.get()
         chart_type = self.current_chart_type.get()
 
-        self.fig.clear()
+        try:
+            # 1. Fetch Data
+            if metric == "App Usage (Time)":
+                data = get_app_usage_state(limit=5)
+                title = "Top 5 Applications (Minutes Used)"
+            elif metric == "Blocked Web Attempts":
+                data = get_web_block_stats()
+                title = "Blocked Web Attempts"
+            elif metric == "Trigger Word Alerts":
+                data = get_trigger_word_stats()
+                title = "Trigger Word Detections"
+            else:
+                data = []
+                title = "No Data"
 
-        # Ensure background remains styled after clear
-        self.fig.patch.set_facecolor(GUNMETAL)
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_facecolor(GUNMETAL)
+            # 2. Extract clean lists immediately to prevent DB memory address caching issues
+            if not data:
+                names, values = [], []
+                axis_label = ""
+            else:
+                names = [str(item["name"]) for item in data]
+                if metric == "App Usage (Time)":
+                    values = [float(item["seconds"]) / 60.0 for item in data]
+                    axis_label = "Minutes"
+                else:
+                    values = [int(item["count"]) for item in data]
+                    axis_label = "Total Occurrences"
 
-        # Fetch Data based on Metric Dropdown
-        if metric == "App Usage (Time)":
-            data = get_app_usage_state(limit=5)
-            title = "Top 5 Applications (Minutes Used)"
-        elif metric == "Blocked Web Attempts":
-            data = []
-            title = "Blocked Web Attempts "
-        elif metric == "Trigger Word Alerts":
-            data = []
-            title = "Trigger Word Detections"
-        else:
-            data = []
-            title = "No Data"
+            # 3. Bulletproof State Caching
+            current_state = f"{metric}_{chart_type}_{names}_{values}"
+            if getattr(self, "_last_chart_state", None) == current_state:
+                return
+            self._last_chart_state = current_state
 
-        # Handle Empty Data
+            # 4. THE ULTIMATE FIX: Clear the Figure cleanly, and rebuild the subplot!
+            # This wipes out Pie Chart warping but keeps the UI completely connected.
+            self.fig.clf()
+            self.fig.patch.set_facecolor(GUNMETAL)
+            self.ax = self.fig.add_subplot(111)
+            self.ax.set_facecolor(GUNMETAL)
 
-        if not data:
-            self.ax.spines["top"].set_visible(False)
-            self.ax.spines["right"].set_visible(False)
-            self.ax.spines["bottom"].set_visible(False)
-            self.ax.spines["left"].set_visible(False)
-            self.ax.set_xticks([])
-            self.ax.set_yticks([])
-            self.ax.text(0.5, 0.5, f"No Data Available for:\n{metric}",
-                         ha='center', va='center', color=DUST_GREY, fontsize=12)
-            self.ax.set_title(title, color=DUST_GREY, pad=15)
+            # 5. Handle Empty/Zero Data
+            if not data or sum(values) == 0:
+                self.ax.spines["top"].set_visible(False)
+                self.ax.spines["right"].set_visible(False)
+                self.ax.spines["bottom"].set_visible(False)
+                self.ax.spines["left"].set_visible(False)
+                self.ax.set_xticks([])
+                self.ax.set_yticks([])
+                self.ax.text(0.5, 0.5, f"No Data Available for:\n{metric}", ha='center', va='center', color=DUST_GREY,
+                             fontsize=12)
+                self.ax.set_title(title, color=DUST_GREY, pad=15)
+                self.canvas.draw() # FIX: Immediate synchronous draw
+                return
+
+            # 6. Draw Visuals
+            if chart_type == "Pie Chart":
+                color_palette = [OLD_GOLD, PINE_BLUE, "#8c5e58", "#5b6c5d", "#7a8b99", "#d3d0cb", "#393e41"]
+                self.ax.pie(values, labels=names, autopct="%1.1f%%", colors=color_palette[:len(names)],
+                            textprops={'color': DUST_GREY})
+                self.ax.axis("equal")
+
+            elif chart_type == "Horizontal Bar":
+                self.ax.spines["top"].set_visible(False)
+                self.ax.spines["right"].set_visible(False)
+                self.ax.spines["bottom"].set_color(DUST_GREY)
+                self.ax.spines["left"].set_color(DUST_GREY)
+                self.ax.tick_params(axis="x", colors=DUST_GREY)
+                self.ax.tick_params(axis="y", colors=DUST_GREY)
+                self.ax.grid(alpha=0.15)
+
+                self.ax.barh(names, values, color=OLD_GOLD, edgecolor="#c9a636", height=0.55)
+                self.ax.set_xlabel(axis_label, color=DUST_GREY)
+
+            else:
+                self.ax.spines["top"].set_visible(False)
+                self.ax.spines["right"].set_visible(False)
+                self.ax.spines["bottom"].set_color(DUST_GREY)
+                self.ax.spines["left"].set_color(DUST_GREY)
+                self.ax.set_xticks(range(len(names)))
+                self.ax.set_xticklabels(names, rotation=35, ha="right", color=DUST_GREY)
+                self.ax.tick_params(axis="y", colors=DUST_GREY)
+                self.ax.grid(alpha=0.15)
+
+                self.ax.bar(names, values, color=OLD_GOLD, edgecolor="#c9a636", width=0.55)
+                self.ax.set_ylabel(axis_label, color=DUST_GREY)
+
+            self.ax.set_title(title, color=DUST_GREY, fontsize=12, pad=15)
+            self.fig.subplots_adjust(bottom=0.35, left=0.15, right=0.95, top=0.85)
+
+            # FIX: Force the canvas to render immediately, ignoring Tkinter's idle queue
             self.canvas.draw()
-            return
 
-        names = [item["name"] for item in data]
-        values = [item["seconds"] / 60 for item in data]
+        except Exception as e:
+            print(f"⚠️ Analytics Render Error: {e}")
 
-        # Draw Visuals based on Chart Type Dropdown
-        if chart_type == "Pie Chart":
-            self.ax.pie(
-                values,
-                labels=names,
-                autopct="%1.1f%%",
-                colors=[OLD_GOLD, PINE_BLUE, "#8c5e58", "#5b6c5d", "#7a8b99"],
-                textprops={'color': DUST_GREY}
-            )
-            self.ax.axis("equal")
-        elif chart_type == "Horizontal Bar":
-            self.ax.spines["top"].set_visible(False)
-            self.ax.spines["right"].set_visible(False)
-            self.ax.spines["bottom"].set_color(DUST_GREY)
-            self.ax.spines["left"].set_color(DUST_GREY)
-            self.ax.tick_params(axis="x", colors=DUST_GREY)
-            self.ax.tick_params(axis="y", colors=DUST_GREY)
-            self.ax.grid(alpha=0.15)
-
-            self.ax.barh(names, values, color=OLD_GOLD, edgecolor="#c9a636", height=0.55)
-            self.ax.set_xlabel("Minutes", color=DUST_GREY)
-
-        else:
-            self.ax.spines["top"].set_visible(False)
-            self.ax.spines["right"].set_visible(False)
-            self.ax.spines["bottom"].set_color(DUST_GREY)
-            self.ax.spines["left"].set_color(DUST_GREY)
-            # self.ax.tick_params(axis="x", colors=DUST_GREY, rotation=15)
-            # self.ax.tick_params(axis="y", colors=DUST_GREY)
-            # self.ax.grid(alpha=0.15)
-
-            self.ax.set_xticks(range(len(names)))
-            self.ax.set_xticklabels(names, rotation=35, ha="right", color=DUST_GREY)
-            self.ax.tick_params(axis="y", colors=DUST_GREY)
-            self.ax.grid(alpha=0.15)
-
-            self.ax.bar(names, values, color=OLD_GOLD, edgecolor="#c9a636", width=0.55)
-            self.ax.set_ylabel("Minutes", color=DUST_GREY)
-
-        self.ax.set_title(title, color=DUST_GREY, fontsize=12, pad=15)
-        self.fig.tight_layout(pad=2.0)
-        self.canvas.draw()
-
-        # # Modern axis styling again after clear
-        # self.ax.spines["top"].set_visible(False)
-        # self.ax.spines["right"].set_visible(False)
-        # self.ax.spines["bottom"].set_color(DUST_GREY)
-        # self.ax.spines["left"].set_color(DUST_GREY)
-        # self.ax.tick_params(axis="x", colors=DUST_GREY, rotation=15)
-        # self.ax.tick_params(axis="y", colors=DUST_GREY)
-        #
-        # # Subtle grid (premium dashboard style)
-        # self.ax.grid(alpha=0.15)
-        #
-        # if not data:
-        #     self.ax.set_title("No Usage Data Available", color=DUST_GREY)
-        #     self.canvas.draw()
-        #     return
-        #
-        # names = [item["name"] for item in data]
-        # values = [item["seconds"] / 60 for item in data]
-        #
-        # # Slightly thicker bars for better visual weight
-        # self.ax.bar(
-        #     names,
-        #     values,
-        #     color=OLD_GOLD,
-        #     width=0.55,
-        #     edgecolor="#c9a636",
-        #     linewidth=1.2
-        # )
-        # self.ax.set_ylabel("Minutes", color=DUST_GREY)
-        # self.ax.set_xlabel("App Names", color=DUST_GREY)
-        #
-        # self.ax.set_title(
-        #     "Top 5 Applications (Minutes Used)",
-        #     color=DUST_GREY,
-        #     fontsize=12,
-        #     pad=15
-        # )
-        #
-        # self.canvas.draw()
 
     def on_close(self):
-        self.running = False
+        """Forces Task Manager and the 'X' button to require a password"""
+        # Spawns a popup asking for the password
+        dialog = ctk.CTkInputDialog(text="Enter Master Password to shutdown:", title="Authorized Shutdown")
+        entered = dialog.get_input()
 
-        if self.status_job is not None:
-            try:
-                self.after_cancel(self.status_job)
-            except :
-                pass
+        session = self.Session()
+        try:
+            pwd_setting = session.query(Settings).filter_by(key="master_password").first()
+            actual = pwd_setting.value if pwd_setting else "admin123"
 
-        # self.quit()
-        # self.destroy()
-        sys.exit(0)
+            if entered == actual:
+                print("✅ Shutdown Authorized.")
+                self.running = False
+                if self.status_job is not None:
+                    try:
+                        self.after_cancel(self.status_job)
+                    except:
+                        pass
 
+                lock_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../shutdown.lock"))
+                with open(lock_file, "w") as f:
+                    f.write("authorized")
+
+                os._exit(0)
+            else:
+                print("❌ Shutdown Denied. Wrong Password.")
+                # The window stays open! Task Manager's polite close is blocked!
+        finally:
+            session.close()
+
+
+class LoginWindow(ctk.CTkToplevel):
+    """The full-size lock screen that appears before the dashboard opens"""
+
+    def __init__(self, master):
+        super().__init__(master)  # Bind to the MainWindow root
+        self.title("ParentalCare+ Login")
+        self.geometry("1000x600")
+        self.configure(fg_color=CARBON_BLACK)
+        self.attributes("-topmost", True)
+
+        # Delay grabbing focus to prevent UI freezing
+        self.after(200, self.grab_set)
+
+        self.Session = sessionmaker(bind=engine)
+
+        # Center the card using pack instead of grid
+        self.login_card = ctk.CTkFrame(self, fg_color=GUNMETAL, corner_radius=20, width=400, height=350)
+        self.login_card.pack(expand=True)
+        self.login_card.pack_propagate(False)
+
+        ctk.CTkLabel(self.login_card, text="🛡️", font=ctk.CTkFont(size=60)).pack(pady=(30, 10))
+        ctk.CTkLabel(self.login_card, text="ParentalCare+ Security", font=ctk.CTkFont(size=24, weight="bold"),
+                     text_color=OLD_GOLD).pack(pady=(0, 20))
+
+        self.pwd_entry = ctk.CTkEntry(self.login_card, placeholder_text="Enter Master Password", show="*", width=250,
+                                      height=40, fg_color=CARBON_BLACK, text_color=DUST_GREY, border_color=PINE_BLUE)
+        self.pwd_entry.pack(pady=10)
+        self.pwd_entry.bind("<Return>", lambda event: self.attempt_login())
+
+        ctk.CTkButton(self.login_card, text="Unlock Dashboard", command=self.attempt_login, width=250, height=40,
+                      fg_color=OLD_GOLD, text_color=CARBON_BLACK, font=ctk.CTkFont(weight="bold")).pack(pady=20)
+
+        self.error_label = ctk.CTkLabel(self.login_card, text="", text_color="#cf4444")
+        self.error_label.pack()
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def attempt_login(self):
+        entered = self.pwd_entry.get().strip()
+        session = self.Session()
+        try:
+            pwd_setting = session.query(Settings).filter_by(key="master_password").first()
+            actual = pwd_setting.value if pwd_setting else "admin123"
+
+            if entered == actual:
+                # SUCCESS: Reveal the main dashboard and destroy this child screen
+                self.master.deiconify()
+                if hasattr(self.master, 'update_chart'):
+                    self.master.update_chart()
+                self.destroy()
+            else:
+                self.error_label.configure(text="❌ Incorrect Password")
+                self.pwd_entry.delete(0, "end")
+        finally:
+            session.close()
+
+    def on_close(self):
+        lock_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../shutdown.lock"))
+        with open(lock_file, "w") as f:
+            f.write("authorized")
+        os._exit(0)
+
+
+class LockdownWindow(ctk.CTkToplevel):
+    """A draggable, minimal popup with a Master Password override"""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("System Alert")
+        self.geometry("400x250")
+        self.attributes("-topmost", True)
+        self.overrideredirect(True)
+        self.configure(fg_color="#8c1c1c")
+
+        self.after(200, self.grab_set)
+
+        self.Session = sessionmaker(bind=engine)
+        self.web_filter = WebFilterEngine()
+        self.sync_web_engine()
+
+        self.bind("<ButtonPress-1>", self.start_move)
+        self.bind("<B1-Motion>", self.do_move)
+
+        ctk.CTkLabel(self,
+                     text="🚨 SYSTEM IN LOCKDOWN 🚨\n\nUnauthorized tampering detected.\nOnly whitelisted applications are allowed.",
+                     font=ctk.CTkFont(size=16, weight="bold"), text_color="white").pack(pady=(20, 10))
+
+        self.pwd_entry = ctk.CTkEntry(self, placeholder_text="Enter Parent Password", show="*", width=200,
+                                      fg_color=CARBON_BLACK, text_color=DUST_GREY, border_color=OLD_GOLD)
+        self.pwd_entry.pack(pady=10)
+        self.pwd_entry.bind("<Return>", lambda event: self.attempt_unlock())
+
+        ctk.CTkButton(self, text="Unlock System", fg_color=OLD_GOLD, text_color=CARBON_BLACK, hover_color="#c9a636",
+                      command=self.attempt_unlock).pack(pady=10)
+
+        self.error_label = ctk.CTkLabel(self, text="", text_color="#ffb3b3", font=ctk.CTkFont(size=12))
+        self.error_label.pack()
+
+        self.protocol("WM_DELETE_WINDOW", self.disable_event)
+
+    def sync_web_engine(self):
+        policies = get_web_policies()
+        domains_to_block = []
+        keywords_to_block = []
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        categories_path = os.path.join(base_dir, '../../data/web_categories.json')
+
+        try:
+            with open(categories_path, mode="r") as f:
+                category_data = json.load(f)
+        except Exception:
+            category_data = {}
+
+        for p in policies:
+            if p["type"] == "domain":
+                domains_to_block.append(p["value"])
+            elif p["type"] == "keyword":
+                keywords_to_block.append(p["value"])
+            elif p["type"] == "category":
+                cat_name = p["value"]
+                if cat_name in category_data:
+                    domains_to_block.extend(category_data[cat_name])
+                    for domain in category_data[cat_name]:
+                        core_word = domain.split(".")[0]
+                        if core_word not in keywords_to_block:
+                            keywords_to_block.append(core_word)
+
+        self.web_filter.update_hosts_file(domains_to_block)
+        self.web_filter.set_banned_keywords(keywords_to_block)
+        self.web_filter.start_scanner()
+
+    def start_move(self, event):
+        self.x = event.x
+        self.y = event.y
+
+    def do_move(self, event):
+        deltax = event.x - self.x
+        deltay = event.y - self.y
+        x = self.winfo_x() + deltax
+        y = self.winfo_y() + deltay
+        self.geometry(f"+{x}+{y}")
+
+    def disable_event(self):
+        pass
+
+    def attempt_unlock(self):
+        entered_pwd = self.pwd_entry.get().strip()
+        session = self.Session()
+        try:
+            pwd_setting = session.query(Settings).filter_by(key="master_password").first()
+            actual_pwd = pwd_setting.value if pwd_setting else "admin123"
+            if entered_pwd == actual_pwd:
+                lock_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../shutdown.lock"))
+                with open(lock_file, "w") as f:
+                    f.write("authorized")
+                os._exit(0)
+            else:
+                self.error_label.configure(text="❌ Incorrect Password")
+                self.pwd_entry.delete(0, "end")
+        finally:
+            session.close()
 
 if __name__ == "__main__":
     app = MainWindow()

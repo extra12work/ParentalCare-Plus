@@ -99,10 +99,12 @@ class TriggerEvent(Base):
     __tablename__ = "trigger_events"
 
     id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, default=datetime.now())
+    timestamp = Column(DateTime, default=datetime.now)
     trigger_word = Column(String, nullable=False)
+    window_title = Column(String)
     context_text = Column(String)
     screenshot_path = Column(String)
+
 
 # Global Settings
 class Settings(Base):
@@ -110,6 +112,7 @@ class Settings(Base):
     __tablename__ = "settings"
     key = Column(String, primary_key=True)      # eg 'app_blocker_enabled'
     value = Column(String)      # eg 'true'
+
 
 # Helper Functions
 
@@ -242,8 +245,49 @@ def get_web_policies():
     finally:
         session.close()
 
+def get_web_block_stats():
+    """Return stats for Web Filter pie chart"""
+    session = Session()
+    try:
+        stats = session.query(
+            SecurityEvent.target,
+            func.count(SecurityEvent.id).label("total_blocks")
+        ).filter(SecurityEvent.event_type == "WEB_BLOCK")\
+                 .group_by(SecurityEvent.target)\
+                 .order_by(desc("total_blocks")).limit(5).all()
+
+        return [{"name": s[0], "count": s[1]} for s in stats]
+
+    except Exception as e:
+        print(f"Web Stats Error: {e}")
+        return []
+
+    finally:
+        session.close()
+
+
+def get_trigger_word_stats():
+    """Return stats for Threat Detection pie chart"""
+
+    session = Session()
+    try:
+        stats = session.query(
+            TriggerEvent.trigger_word,
+            func.count(TriggerEvent.id).label("total_trigger")
+        ).group_by(TriggerEvent.trigger_word)\
+        .order_by(desc("total_trigger")).limit(5).all()
+
+        return [{"name": s[0], "count": s[1]} for s in stats]
+
+    except Exception as e:
+        print(f"Trigger Word Stats Error: {e}")
+        return []
+
+    finally:
+        session.close()
+
 def get_app_usage_state(limit=5):
-    """Returns stats for the UI Bar Chart"""
+    """Returns stats for the App Bar Chart"""
 
     session = Session()
 

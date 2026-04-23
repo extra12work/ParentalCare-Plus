@@ -6,6 +6,9 @@ import ctypes
 import uiautomation as auto
 import time
 import threading
+from datetime import datetime
+from sqlalchemy.orm import sessionmaker
+from app.models.database import engine, SecurityEvent
 from urllib.parse import urlparse
 from app.controllers.phishing_detector import PhishingDetector
 
@@ -118,39 +121,60 @@ class WebFilterEngine:
                 try:
                     current_url = self._get_browser_url()
                     if current_url:
+                        if not current_url.startswith('http'):
+                            parseable_url = 'http://' + current_url
+                        else:
+                            parseable_url = current_url
+
+                            # Extract clean domain (e.g., "bing.com" or "instagram.com")
+                        clean_domain = urlparse(parseable_url).netloc.replace("www.", "")
+
                         # KEYWORD CHECK
                         if self.banned_keywords:
                             for keyword in self.banned_keywords:
                                 if keyword in current_url:
                                     print(f" ⚠️ Banned keyword({keyword}) detected in the url")
                                     auto.SendKeys('{Ctrl}w')        # Forcefully close the window
+                                    self._log_web_block(blocked_url=keyword, block_reason="Banned Keyword Match")
                                     time.sleep(2)
                                     continue
 
                         # PHISHING CHECK
                         # We must add 'http://' temporarily just so urlparse can read it properly
-                        if not current_url.startswith('http'):
-                            parseable_url = 'http://' + current_url
-                        else:
-                            parseable_url = current_url
-
-                        # Extract just the domain (e.g., "www.1nstagram.com" -> "1nstagram.com")
-                        domain = urlparse(parseable_url).netloc.replace("www.", "")
-
-                        # print(f"🔍 DEBUG: Raw URL = '{current_url}' | Extracted Domain = '{domain}'")
-
-                        # Feed it to our Phishing AI
-                        if domain and self.phishing_ai.check_for_phishing(domain):
-                            print(f" 🚨 PHISHING DETECTED: {domain} is spoofing a trusted site !")
+                        if clean_domain and self.phishing_ai.check_for_phishing(clean_domain):
+                            print(f" 🚨 PHISHING DETECTED: {clean_domain} is spoofing a trusted site !")
                             auto.SendKeys('{Ctrl}w')
+                            self._log_web_block(blocked_url=clean_domain, block_reason="Phishing AI Match")
                             time.sleep(2)
-
 
                 except Exception as e:
                     print(f"Scanner Error: {e}")
 
                 time.sleep(1)
 
+
+    def _log_web_block(self, blocked_url, block_reason):
+        """Logs the blocked urls to the database and provides data for graphs"""
+
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        try:
+            web_log = SecurityEvent(
+                event_type = "WEB_BLOCK",
+                target = blocked_url,
+                details = block_reason
+            )
+
+            session.add(web_log)
+            session.commit()
+            print(f" 💾 Database Logged: Blocked access to {blocked_url}")
+
+        except Exception as e:
+            print(f"Error Adding Web logs to database: {e}")
+
+        finally:
+            session.close()
 
     def start_scanner(self):
 
@@ -167,25 +191,25 @@ class WebFilterEngine:
             self.scanner_thread.join(timeout=2)
 
 
-# # ==========================================
-# # QUICK TEST BLOCK
-# # ==========================================
-# if __name__ == "__main__":
-#     engine = WebFilterEngine()
-#
-#     # Let's test the URL Keyword Scanner
-#     engine.set_banned_keywords(["proxysite", "unblock", "badword", "instagram"])
-#     engine.start_scanner()
-#
-#     print("🛡️ Web Scanner Started. Open Chrome/Edge and type 'proxysite' in the URL bar.")
-#     print("Press Ctrl+C in this terminal to stop.")
-#
-#     try:
-#         while True:
-#             time.sleep(1)
-#     except KeyboardInterrupt:
-#         engine.stop_scanner()
-#         print("🛑 Scanner stopped.")
+# ==========================================
+# QUICK TEST BLOCK
+# ==========================================
+if __name__ == "__main__":
+    filter_engine = WebFilterEngine()
+
+    # Let's test the URL Keyword Scanner
+    filter_engine.set_banned_keywords(["proxysite", "unblock", "badword", "instagram"])
+    filter_engine.start_scanner()
+
+    print("🛡️ Web Scanner Started. Open Chrome/Edge and type 'proxysite' in the URL bar.")
+    print("Press Ctrl+C in this terminal to stop.")
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        filter_engine.stop_scanner()
+        print("🛑 Scanner stopped.")
 
 
 
