@@ -17,3 +17,12 @@ data/*.db
 #Logs
 *.log
 logs/*.log
+
+```text
+     .venv1/
+     __pycache__/
+     *.pyc
+     data/parental_care.db
+     .env
+     lockdown.flag
+     .idea/

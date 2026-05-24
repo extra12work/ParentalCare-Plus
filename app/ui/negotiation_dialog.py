@@ -2,24 +2,23 @@
 # Phase 4: The Negotiation Protocol (Child-Facing UI)
 
 import sys
+import os
 import customtkinter as ctk
 from app.models.database import NegotiationRequest, engine
 from sqlalchemy.orm import sessionmaker
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+from app.controllers.telegram_service import TelegramAlertService
 
 # THEME CONFIGURATION
-
-# Sets the theme to Dark Mode
-# Cybersecurity aesthetic
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
 
-# Professional Color Palette
-CARBON_BLACK = "#1e2019"  # Background
-GUNMETAL = "#393e41"  # Sidebar/Cards
-DUST_GREY = "#d3d0cb"  # Text
-OLD_GOLD = "#e2c044"  # Accents/Active State
-PINE_BLUE = "#587b7f"  # Secondary Accents
+CARBON_BLACK = "#1e2019"
+GUNMETAL = "#393e41"
+DUST_GREY = "#d3d0cb"
+OLD_GOLD = "#e2c044"
+PINE_BLUE = "#587b7f"
 
 
 class NegotiationDialog(ctk.CTk):
@@ -39,18 +38,15 @@ class NegotiationDialog(ctk.CTk):
         self.attributes("-topmost", True)
         self.focus_force()
 
-        # Center the window on the screen
-        self.update_idletasks()     # OS draws the window invisibly first
+        # Center the window on the screen dynamically
+        self.update_idletasks()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        x = int((screen_width / 1.5) - (window_width / 1.5))    # 1.5 to center it properly
-        y = int((screen_height / 3) - (window_height / 2))      # Divide by 3 sets it a little higher than the dead center
+        x = int((screen_width / 1.5) - (window_width / 1.5))
+        y = int((screen_height / 3) - (window_height / 2))
         self.geometry(f"{window_width}x{window_height}+{x}+{y}")
 
-
-
         # Alert Header
-
         header_text = " ⚠️ Website Blocked " if self.target_type == "web" else " ⚠️ Application Blocked "
 
         self.warning_label = ctk.CTkLabel(
@@ -69,14 +65,10 @@ class NegotiationDialog(ctk.CTk):
         )
         self.blocked_app_label.pack(pady=(0, 20))
 
-
-
         # Input and Submit Area
-
         self.input_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.input_frame.pack(padx=30, fill="x")
 
-        # Inputs side-by-side
         self.reason_entry = ctk.CTkEntry(
             self.input_frame,
             placeholder_text="Reason (e.g., school assignment) ",
@@ -96,7 +88,6 @@ class NegotiationDialog(ctk.CTk):
         )
         self.time_entry.pack(side="left")
 
-        # Send Request button packed UNDER the inputs, aligned to the right
         self.submit_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.submit_frame.pack(padx=30, pady=(10, 0), fill="x")
 
@@ -111,13 +102,9 @@ class NegotiationDialog(ctk.CTk):
         )
         self.send_request_btn.pack(side="right")
 
-
-
         # The Footer Area (Cancel button)
-
         self.footer_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.footer_frame.pack(side="bottom", fill="x", padx=20, pady=20)
-
 
         self.cancel_btn = ctk.CTkButton(
             self.footer_frame,
@@ -132,20 +119,16 @@ class NegotiationDialog(ctk.CTk):
         )
         self.cancel_btn.pack(side="right")
 
-
     def send_request_list(self):
         """Validating input and save the Negotiation request to DB """
-
         raw_reason = self.reason_entry.get().strip()
-        raw_time =self.time_entry.get().strip()
+        raw_time = self.time_entry.get().strip()
 
         try:
              minutes = int(raw_time)
              if minutes <= 0:
                  raise ValueError
-
         except ValueError:
-
             self.time_entry.configure(border_color="#cf4444")
             self.time_entry.delete(0, "end")
             self.time_entry.insert(0, "Invalid")
@@ -163,20 +146,29 @@ class NegotiationDialog(ctk.CTk):
             )
             session.add(new_request)
             session.commit()
-            print(f" ✅ Saved Request: {minutes} min for {self.app_name} (Reason: {raw_reason}")
+            print(f" ✅ Saved Request: {minutes} min for {self.app_name} (Reason: {raw_reason})")
 
-            self.destroy()
+            # Transmit the request to the parent's phone
+            try:
+                tele = TelegramAlertService()
+                msg = f"⏳ <b>TIME REQUEST</b> ⏳\n\n<b>Target:</b> {self.app_name}\n<b>Requested Time:</b> {minutes} mins\n<b>Reason:</b> {raw_reason}\n\nTo approve, reply with:\n/allow {self.app_name} {minutes}"
+                tele.send_alert(msg)
+            except Exception as tele_err:
+                print(f" ⚠️ Telegram transmission failed: {tele_err}")
+
+            # Disable the button so they can't spam it, then wait 1.5 seconds before closing
+            self.send_request_btn.configure(text="Sent!", state="disabled")
+            self.after(1500, self.destroy)
 
         except Exception as e:
             print(f" ❌ Database Error: {e}")
-
         finally:
             session.close()
 
 
 if __name__ == "__main__":
     target_app = sys.argv[1] if len(sys.argv) > 1 else "Unknown"
-    t_type = sys.argv[2] if len(sys.argv) >2 else "app"
+    t_type = sys.argv[2] if len(sys.argv) > 2 else "app"
 
     app = NegotiationDialog(target_app, t_type)
     app.mainloop()
